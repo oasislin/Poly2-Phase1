@@ -1,5 +1,7 @@
 # Implementation Tasks: Phase 1
 
+> **对齐 v5.7 执行规格（2026-08-14）**：Task 1.2 起按 v5.7 口径执行（时效分层 EMOS、6h 窗口 TMAX/TMIN 特征、5 成员集合、68 模型/站矩阵）。**Task 1.1 为已完成历史记录，冻结不改。**
+
 ## Phase 1A: Core Infrastructure (Weeks 1-2)
 
 ### Task 1.1: Wunderground Data Pipeline
@@ -41,39 +43,48 @@
 **Estimate**: 3 days
 **Dependencies**: None
 
-**Description**: Implement GEFS data download and preprocessing
-- [ ] Create `gefs_fetcher.py` with Herbie integration
-- [ ] Support both reforecast (historical) and real-time data
-- [ ] Handle AWS Open Data authentication and rate limiting
-- [ ] Implement GRIB2 to xarray conversion
-- [ ] Add data caching to avoid redundant downloads
-- [ ] Write unit tests for data fetching and parsing
+**Description**: Implement GEFS data download and preprocessing（v5.7 口径）
+- [ ] Create `gefs_fetcher.py` with Herbie integration（注意：PyPI 包名为 `herbie-data`，`herbie` 为无关包）
+- [ ] 下载变量：`tmax_2m` / `tmin_2m`（6h 窗口 TMAX/TMIN，非 tmp_2m）
+- [ ] 支持 reforecast（训练，2000-2019）与 realtime（预测）双模式
+- [ ] **成员协议**：训练与预测均使用 c00 + p01-p04 共 5 成员（AWS reforecast 实证仅存 5 成员，2005/2015/2019 验证一致）
+- [ ] **窗口下载**：每 init 下载覆盖目标本地日的 6h 窗口子集（每变量/成员 3-5 个窗口）
+- [ ] **区域裁剪流程**：下载后立即裁剪上海/丹佛区域（21×21 格点）→ 输出"裁剪完成可移走 raw"信号 → 用户移走原始全球文件后继续下一分片
+- [ ] 实现 GRIB2 → xarray 转换（含经度 0-360°/±180° 处理）
+- [ ] 数据缓存 + 分片下载（按年/成员/时次）+ 断点续传 + MD5 校验
+- [ ] Write unit tests for data fetching and parsing（mock 网络）
 
 **Acceptance Criteria**:
-- Can download GEFS data for specified dates and stations
-- Returns xarray Dataset with proper coordinate system
-- Handles network errors gracefully with retry logic
-- Caches downloaded data locally
+- 可下载 reforecast（2000-2019）与 realtime 的 tmax_2m/tmin_2m 6h 窗口数据
+- 返回含 latitude/longitude/time/member 坐标的 xarray Dataset
+- 5 成员协议正确（训练/预测同成员集合）
+- 区域裁剪正确，裁剪后可通知移走 raw，磁盘仅保留裁剪数据
+- 网络错误重试 + 断点续传 + MD5 校验
+- 缓存避免重复下载
 
 ### Task 1.3: Data Processing Foundation
 **Priority**: High  
 **Estimate**: 4 days
 **Dependencies**: Task 1.1, 1.2
 
-**Description**: Implement core data processing utilities
-- [ ] Create `time_aligner.py` for UTC to local time conversion
+**Description**: Implement core data processing utilities（v5.7 口径）
+- [ ] Create `time_aligner.py` for UTC to local time conversion（本地日 = 当地时钟 00:00-24:00，含丹佛 DST 平移）
 - [ ] Implement `unit_converter.py` for temperature unit standardization
-- [ ] Create `spatial_interpolator.py` with bilinear interpolation
-- [ ] Implement `elevation_corrector.py` with standard lapse rate
-- [ ] Add `feature_extractor.py` for ensemble statistics
+- [ ] Create `spatial_interpolator.py` with bilinear interpolation（禁止最近邻）
+- [ ] Implement `elevation_corrector.py` with standard lapse rate（Γ = 0.0065 K/m，作用于 TMAX/TMIN 日极值特征）
+- [ ] Add `feature_extractor.py`：
+  - 日极值 = **完全包含（⊆ 本地日）**的 6h TMAX/TMIN 窗口极值（非相交窗口）
+  - 集合统计量 = 集合均值 + 集合方差 + 成员极值范围（5 成员；不用分位数与时间特征）
+  - **新增城市覆盖告警**：天文算法计算全年日出，验证覆盖跨度 ⊇ [日出−1h, 日出+0.5h]，不满足输出警告
 - [ ] Write comprehensive tests for all transformations
 
 **Acceptance Criteria**:
-- All temperatures in Celsius internally
-- Time alignment correct for all timezones (including DST)
-- Bilinear interpolation matches reference implementation
-- Elevation correction applied correctly
-- Feature extraction produces expected statistics
+- 所有温度内部为 Celsius
+- 本地日边界正确（含丹佛 DST：夏 12:00Z / 冬 13:00Z 平移）
+- 窗口纳入规则 = 完全包含（上海 3 窗口 / 丹佛夏 4 窗口 / 丹佛冬 3 窗口，安全边际已验证）
+- 双线性插值匹配参考实现
+- 高程修正应用于 TMAX/TMIN 特征
+- 特征提取输出 {mean, variance, member_max, member_min}，无分位数
 
 ### Task 1.4: Data Storage System
 **Priority**: Medium
@@ -118,17 +129,21 @@
 **Estimate**: 4 days
 **Dependencies**: Task 2.1, 1.3
 
-**Description**: Implement EMOS calibration for skewed Gaussian
+**Description**: Implement EMOS calibration for skewed Gaussian（v5.7 口径）
 - [ ] Create `emos_trainer.py` with CRPS minimization
-- [ ] Support separate training for max and min temperatures
-- [ ] Implement seasonal bucketing (DJF, MAM, JJA, SON)
-- [ ] Add hyperparameter tuning with cross-validation
+- [ ] **模型矩阵**：季节（DJF/MAM/JJA/SON）× 时效节点 → 68 模型/站点（最高温 9 节点 {54,48,42,36,30,24,18,12,6} + 最低温 8 节点 {48,42,36,30,24,18,12,6}），2 站共 136 个
+- [ ] 命名规范 `{StationID}_{Season}_{Max|Min}_lead{Hours}h.pkl`
+- [ ] **Lead Time 归桶**：名义目标时间（最高温 15:00 LT / 最低温 06:00 LT）− init，round_to_nearest_6h
+- [ ] **三级降级**（v5.3）：Level 1 偏态 EMOS → Level 2 标准高斯 → Level 3 气候学；硬触发（优化失败/NaN/超迭代）+ 软触发（训练集 CRPS 无改进）
+- [ ] 训练/预测成员对齐（c00+p01-p04 5 成员）
 - [ ] Implement model persistence with pickle/joblib
 
 **Acceptance Criteria**:
-- CRPS decreases during training
-- Separate models for max/min and seasons
-- Hyperparameter tuning improves performance
+- 68 模型/站点矩阵正确生成，命名规范正确
+- CRPS 随 Lead Time 衰减用**配对统计检验**验收（不显著倒挂视为持平通过）
+- 三级降级正确触发（输入病态数据返回 Level 3 且不崩溃）
+- 各时效分桶独立通过 PIT K-S 检验（p>0.05）
+- MPIW Ratio < 0.9（锐度，相对气候学窄 ≥10%）
 - Models can be saved and loaded
 
 ### Task 2.3: Training Pipeline
@@ -136,11 +151,12 @@
 **Estimate**: 3 days
 **Dependencies**: Task 2.2, 1.4
 
-**Description**: Build complete training pipeline
+**Description**: Build complete training pipeline（v5.7 口径）
 - [ ] Create `training_pipeline.py` orchestrating data→features→training
-- [ ] Implement 5-year rolling window training
+- [ ] 验证集双轨：单次留出（训练 2000-2018 / 验证 2019）+ 训练期滚动验证（Rolling-Origin，逐年滚动原点）
+- [ ] 时间墙隔离：训练阶段严禁访问任何验证集数据
 - [ ] Add model versioning with DVC
-- [ ] Create training reports with metrics
+- [ ] Create training reports with metrics（CRPS 衰减曲线、PIT、MPIW）
 - [ ] Add automated retraining scheduling
 
 **Acceptance Criteria**:

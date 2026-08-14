@@ -1,5 +1,7 @@
 # Project Structure and Module Design
 
+> **对齐 v5.7 执行规格（2026-08-14）**：模型矩阵升级为"季节 $\times$ 时效"（68 模型/站），特征为 6h 窗口 TMAX/TMIN 日极值 + 5 成员集合统计（均值/方差/成员极值）。
+
 ## Directory Structure
 
 ```
@@ -255,31 +257,33 @@ class SkewedGaussian:
         """Fit distribution parameters to data"""
 ```
 
-#### `emos_trainer.py`
+#### `emos_trainer.py`（v5.7 对齐）
 ```python
 class EMOSTrainer:
-    """EMOS calibration for skewed Gaussian distributions"""
+    """EMOS calibration for skewed Gaussian distributions（季节 × 时效矩阵）"""
     
     def __init__(
         self,
-        feature_columns: List[str],
+        feature_columns: List[str],   # [ens_mean, ens_var, member_max, member_min]
         target_column: str,
-        season: str
+        season: str,                  # DJF / MAM / JJA / SON
+        lead_time_bucket: int,        # 6, 12, ..., 54（最高温）；6, 12, ..., 48（最低温）
+        target_type: str              # 'max' | 'min'
     ):
-        """Initialize trainer for specific season and target"""
+        """Initialize trainer for specific season × lead-time bucket and target"""
         
     def train(
         self,
         features: pd.DataFrame,
         observations: pd.Series
     ) -> Dict[str, Any]:
-        """Train EMOS model to minimize CRPS"""
+        """Train EMOS model to minimize CRPS；三级降级：Level 1 偏态 → Level 2 高斯 → Level 3 气候学"""
         
     def predict_parameters(
         self,
         features: pd.DataFrame
     ) -> pd.DataFrame:
-        """Predict distribution parameters for new data"""
+        """Predict distribution parameters (μ, σ, skewness) for new data"""
         
     def calculate_crps(
         self,
@@ -288,6 +292,7 @@ class EMOSTrainer:
     ) -> float:
         """Calculate CRPS for predictions"""
 ```
+> 模型矩阵规模：4 季节 × (9 + 8) 时效节点 = 68 模型/站点，2 站共 136 个。命名 `{Station}_{Season}_{Max|Min}_lead{H}h.pkl`。
 
 ### 4. Prediction Modules
 
@@ -440,17 +445,15 @@ regions:
     stations: ["KDEN"]
 ```
 
-### `configs/model_params.yaml`
+### `configs/model_params.yaml`（v5.7 对齐）
 ```yaml
 training:
   train_start_year: 2000
-  train_end_year: 2012
-  val_start_year: 2013
-  val_end_year: 2017
-  test_start_year: 2018
-  test_end_year: 2019
-  rolling_window_years: 5
-  retrain_frequency: "quarterly"
+  train_end_year: 2018
+  val_start_year: 2019        # 单次留出主验收
+  val_end_year: 2019
+  rolling_origin: true        # 训练期滚动验证（Rolling-Origin）
+  time_wall_isolation: true   # 训练严禁访问验证集
   
 seasons:
   DJF: [12, 1, 2]   # Winter
@@ -458,21 +461,25 @@ seasons:
   JJA: [6, 7, 8]    # Summer
   SON: [9, 10, 11]  # Fall
 
+lead_time_buckets:
+  max: [54, 48, 42, 36, 30, 24, 18, 12, 6]   # 名义目标 15:00 LT
+  min: [48, 42, 36, 30, 24, 18, 12, 6]        # 名义目标 06:00 LT
+
 emos:
   feature_columns:
     - "ensemble_mean"
-    - "ensemble_std"
-    - "ensemble_p10"
-    - "ensemble_p90"
-    - "day_of_year_sin"
-    - "day_of_year_cos"
-    - "month_sin"
-    - "month_cos"
+    - "ensemble_variance"
+    - "member_max"
+    - "member_min"
   target_columns:
     - "temp_max"
     - "temp_min"
+  members: ["c00", "p01", "p02", "p03", "p04"]   # 5 成员集合对齐
+  degradation:                # 三级降级（硬+软触发）
+    level1: "skewed_emos"
+    level2: "gaussian_emos"
+    level3: "climatology"
   hyperparameters:
-    learning_rate: 0.01
     max_iterations: 1000
     tolerance: 1e-6
 ```

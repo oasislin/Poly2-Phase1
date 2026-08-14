@@ -1,5 +1,7 @@
 # TDD Implementation Plan - Clean Version
 
+> **对齐 v5.7 执行规格（2026-08-14）**：GEFS 测试改用 6h 窗口 TMAX/TMIN + 5 成员口径；特征测试改为 {mean, variance, member_max, member_min}（弃分位数与时间特征）。
+
 ## Week 1-2: Data Infrastructure (TDD Focus)
 
 ### Day 1-2: Wunderground Scraper
@@ -39,19 +41,22 @@ def test_parse_html_extracts_temperature_values():
 
 ### Day 3-4: GEFS Data Fetcher
 
-#### Test 2.1: Regional Data Download
+#### Test 2.1: Regional Data Download（v5.7 对齐）
 ```python
 def test_download_gefs_returns_xarray_dataset():
-    """GEFS fetcher returns xarray Dataset with expected variables"""
+    """GEFS fetcher returns xarray Dataset with expected variables（6h 窗口 TMAX/TMIN，5 成员）"""
     fetcher = GEFSFetcher()
     dataset = fetcher.download_reforecast(
         region_bounds={'lat': (25, 35), 'lon': (115, 125)},
-        date_range=(date(2023, 1, 1), date(2023, 1, 2))
+        date_range=(date(2023, 1, 1), date(2023, 1, 2)),
+        members=[0, 1, 2, 3, 4]   # c00 + p01-p04 共 5 成员
     )
     assert isinstance(dataset, xr.Dataset)
-    assert 't2m' in dataset.variables
+    assert 'tmax' in dataset.variables   # 6h 窗口 TMAX（非 t2m）
+    assert 'tmin' in dataset.variables   # 6h 窗口 TMIN
     assert 'latitude' in dataset.coords
     assert 'longitude' in dataset.coords
+    assert dataset.sizes['member'] == 5
 ```
 
 #### Test 2.2: Region Extraction
@@ -130,43 +135,37 @@ def test_quality_control_flags_impossible_temperatures():
 
 ### Day 8-9: Feature Extraction
 
-#### Test 5.1: Ensemble Statistics Calculation
+#### Test 5.1: Ensemble Statistics Calculation（v5.7 对齐）
 ```python
 def test_ensemble_statistics_calculation():
-    """Ensemble mean, std, percentiles computed correctly"""
+    """集合统计 = {mean, variance, member_max, member_min}（5 成员，弃分位数）"""
     extractor = FeatureExtractor()
     ensemble_data = xr.DataArray(
-        np.random.randn(31, 10, 10),  # 31 ensemble members
+        np.random.randn(5, 10, 10),  # 5 ensemble members (c00+p01-p04)
         dims=['member', 'lat', 'lon']
     )
     stats = extractor.calculate_ensemble_stats(ensemble_data)
     
     assert 'ensemble_mean' in stats
-    assert 'ensemble_std' in stats
-    assert 'ensemble_p10' in stats
-    assert 'ensemble_p90' in stats
-    
-    # Mean should be close to 0 for standard normal
-    assert abs(stats['ensemble_mean']) < 0.5
+    assert 'ensemble_variance' in stats
+    assert 'member_max' in stats
+    assert 'member_min' in stats
+    assert 'ensemble_p10' not in stats      # 弃分位数
+    assert 'day_of_year_sin' not in stats   # 弃时间特征
 ```
 
-#### Test 5.2: Temporal Feature Extraction
+> **已废弃**：`extract_temporal_features`（Q18 = A，不引入时间特征；季节分桶已覆盖季节信号）。
+
+#### Test 5.2: 日极值窗口特征（v5.7 新增，替代原时间特征测试）
 ```python
-def test_temporal_features_periodic():
-    """Day of year features are periodic (day 1 == day 366)"""
+def test_daily_extreme_from_fully_contained_windows():
+    """日极值 = 完全包含（⊆ 本地日）的 6h TMAX/TMIN 窗口极值"""
     extractor = FeatureExtractor()
-    
-    # January 1st
-    features1 = extractor.extract_temporal_features(datetime(2023, 1, 1))
-    
-    # December 31st (day 365 in non-leap year)
-    features2 = extractor.extract_temporal_features(datetime(2023, 12, 31))
-    
-    # Day of year sine/cosine should be periodic
-    # Note: day_of_year_sin uses sin(2π * day/365.25)
-    # day 1 and day 365 should be close but not identical due to .25 offset
-    assert abs(features1['day_of_year_sin'] - features2['day_of_year_sin']) < 0.1
-    assert abs(features1['day_of_year_cos'] - features2['day_of_year_cos']) < 0.1
+    # 上海本地日 [(D-1)16Z, D 16Z]：完全包含窗口 = 3 个（[18Z,00Z],[00Z,06Z],[06Z,12Z]）
+    daily_max = extractor.daily_extreme(tmax_windows, local_day, 'max')
+    daily_min = extractor.daily_extreme(tmin_windows, local_day, 'min')
+    assert 'window' not in daily_max.dims     # 窗口维度已折叠
+    assert daily_max == tmax_windows.sel(windows ⊆ local_day).max('window')
 ```
 
 ## Current Status

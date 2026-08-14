@@ -1,5 +1,7 @@
 # Polymarket Temperature Prediction System - Phase 1 Complete Specification
 
+> **对齐 v5.7 执行规格（2026-08-14）**：模型架构升级为"季节 $\times$ 时效"二维矩阵（68 模型/站），特征口径为 6h 窗口 TMAX/TMIN 日极值 + 5 成员集合统计。详见《项目执行文件 v5.7.md》。
+
 ## 1. Project Overview
 
 ### 1.1 Core Objective
@@ -97,12 +99,18 @@ Real-time Observations ──────┘
 - **Estimation**: Maximum likelihood or method of moments
 - **CRPS**: Closed-form expression for skewed Gaussian
 
-### 4.2 EMOS Calibration
-- **Input Features**: GEFS ensemble mean, std, percentiles + temporal features
-- **Training Objective**: Minimize CRPS for each season and temperature type
-- **Seasonal Buckets**: DJF (Dec-Jan-Feb), MAM (Mar-Apr-May), JJA (Jun-Jul-Aug), SON (Sep-Oct-Nov)
-- **Separate Models**: Maximum temperature and minimum temperature
-- **Training Period**: 5-year rolling window, quarterly retraining
+### 4.2 EMOS Calibration（v5.7 对齐）
+- **模型架构**：季节 $\times$ 时效二维矩阵 $M_{s,\Delta t}$（时效分层 EMOS）
+  - 最高温：9 时效节点 {54,48,42,36,30,24,18,12,6}，名义目标 15:00 LT
+  - 最低温：8 时效节点 {48,42,36,30,24,18,12,6}，名义目标 06:00 LT（丹佛随 DST）
+  - 合计 68 模型/站点，2 站共 136 个；命名 `{Station}_{Season}_{Max|Min}_lead{H}h.pkl`
+- **Input Features**：集合均值 + 集合方差 + 成员极值范围（5 成员 c00+p01-p04；**不用分位数与时间特征**）
+- **特征口径**：日极值 = 完全包含（⊆ 本地日）的 6h TMAX/TMIN 窗口极值（放弃残缺 3h 窗口）
+- **Training Objective**：最小化 CRPS（每个季节 $\times$ 时效桶独立训练）
+- **Seasonal Buckets**：DJF / MAM / JJA / SON
+- **Separate Models**：最高温与最低温独立训练
+- **三级降级**（v5.3）：Level 1 偏态 EMOS → Level 2 标准高斯 → Level 3 气候学；硬触发（数值异常）+ 软触发（CRPS 无改进）
+- **Training Period**：单次留出（训练 2000-2018 / 验证 2019）+ 训练期滚动验证（Rolling-Origin）；时间墙隔离
 
 ### 4.3 Dynamic Correction
 - **Trigger**: New temperature observation or GEFS forecast
@@ -126,8 +134,8 @@ Real-time Observations ──────┘
 
 ### 5.2 Week 3-4: Model Implementation
 1. **Skewed Gaussian**: Distribution class with CRPS calculation
-2. **EMOS Training**: CRPS minimization with seasonal bucketing
-3. **Training Pipeline**: 5-year rolling window, quarterly retraining
+2. **EMOS Training**: CRPS minimization with seasonal $\times$ lead-time matrix (68 models/station)
+3. **Training Pipeline**: 单次留出（2000-2018/2019）+ 训练期滚动验证（Rolling-Origin），时间墙隔离
 4. **Model Versioning**: DVC for reproducibility
 
 ### 5.3 Week 5-6: Prediction System
@@ -151,11 +159,12 @@ Real-time Observations ──────┘
 ## 6. Technical Decisions
 
 ### 6.1 Data Processing
-- **Time Alignment**: All times to station local time, daily windows 00:00-23:59
+- **Time Alignment**: All times to station local time, daily windows 00:00-23:59（本地时钟定义，含 DST）
 - **Unit Standardization**: Celsius internally, Fahrenheit output for Denver only
 - **Spatial Interpolation**: Bilinear (not nearest neighbor)
-- **Elevation Correction**: Standard lapse rate 0.0065 K/m
-- **Resolution Consistency**: Downsample real-time 3-hour GEFS to 6-hour to match training
+- **Elevation Correction**: Standard lapse rate 0.0065 K/m，作用于 TMAX/TMIN 日极值特征
+- **Resolution Consistency**: 训练/预测统一使用 6h 窗口 TMAX/TMIN（reforecast 与 realtime 均含该口径，天然一致）
+- **Window Inclusion Rule**: 仅纳入完全包含（⊆ 本地日）的 6h 窗口；新增城市需通过极值覆盖告警检查
 
 ### 6.2 Model Training
 - **Training Split**: 2000-2012 train, 2013-2017 validation, 2018-2019 test
