@@ -24,6 +24,12 @@ REFORECAST_CYCLES = (0, 6, 12, 18)
 
 DEFAULT_VARIABLE = "tmax_2m"
 
+# variable_level (file naming) -> regex matching wgrib2-style idx content
+VARIABLE_SEARCH = {
+    "tmax_2m": "TMAX:2 m above ground",
+    "tmin_2m": "TMIN:2 m above ground",
+}
+
 
 class GEFSValidationError(Exception):
     """Raised when user-supplied arguments are invalid."""
@@ -75,8 +81,9 @@ class GEFSFetcher:
                         save_dir=self.cache_dir,
                         verbose=self.verbose,
                     )
-                    h.download(search=variable)
-                    ds = h.xarray(search=variable, engine="cfgrib")
+                    search = self._build_search(variable, forecast_hours)
+                    h.download(search=search)
+                    ds = h.xarray(search=search)
                     ds = self.extract_region(
                         ds, region_bounds["lat"], region_bounds["lon"]
                     )
@@ -85,8 +92,23 @@ class GEFSFetcher:
         return xr.concat(datasets, dim="time")
 
     @staticmethod
+    def _build_search(variable, forecast_hours):
+        """Build a regex matching idx lines (wgrib2 style) for the requested
+        variable and forecast hours; falls back to the variable name itself."""
+        base = VARIABLE_SEARCH.get(variable, variable)
+        if not forecast_hours:
+            return base
+        windows = "|".join(
+            (f"{h - 6}-{h} hour max fcst" if h % 6 == 0 else f"{h - 3}-{h} hour max fcst")
+            for h in forecast_hours
+        )
+        return rf"{base}:(?:{windows})"
+
+    @staticmethod
     def extract_region(ds, lat_bounds, lon_bounds):
-        """Crop a Dataset to the given lat/lon window (basic slicing)."""
+        """Crop a Dataset to the given lat/lon window (basic slicing).
+        GEFS global grids have descending latitudes, so sort ascending first."""
+        ds = ds.sortby("latitude")
         return ds.sel(
             latitude=slice(*lat_bounds), longitude=slice(*lon_bounds)
         )

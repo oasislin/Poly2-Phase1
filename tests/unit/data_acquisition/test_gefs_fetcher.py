@@ -427,7 +427,8 @@ def test_network_reforecast_single_message(tmp_path):
         )
     finally:
         gf.Herbie = real_herbie
-    assert "t2m" in ds.data_vars
+    # Real GEFS TMAX messages decode as "tmax" (mock scaffolding uses "t2m")
+    assert "tmax" in ds.data_vars
     assert ds.sizes["time"] >= 1
     assert ds.latitude.min() >= 25
     assert ds.longitude.max() <= 125
