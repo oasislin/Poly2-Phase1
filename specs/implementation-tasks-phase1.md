@@ -51,7 +51,7 @@
 - [ ] **起报时次**：reforecast 仅 00Z 单时次（AWS 实证，v5.9.1 §1）；realtime 多时次另计
 - [ ] **成员协议**：训练与预测均使用 c00 + p01-p04 共 5 成员（AWS reforecast 实证仅存 5 成员，2005/2015/2019 验证一致）
 - [ ] **窗口下载**：每 init 下载覆盖目标本地日的 6h 窗口子集（每变量/成员 3-5 个窗口）
-- [ ] **区域裁剪流程**：下载后立即裁剪上海/丹佛区域（真实网格 0.25°，上海 25–35N/115–125E 裁剪 = 41×41 格点；是否规整到 21×21 见 T03）→ 输出"裁剪完成可移走 raw"信号 → 用户移走原始全球文件后继续下一分片
+- [ ] **区域裁剪流程**：下载后立即裁剪上海/丹佛区域（真实网格 0.25°，上海 25–35N/115–125E 裁剪 = 41×41 格点；**保持 41×41，不规整**）→ 输出"裁剪完成可移走 raw"信号 → 用户移走原始全球文件后继续下一分片
 - [ ] 实现 GRIB2 → xarray 转换（含经度 0-360°/±180° 处理）
 - [ ] 数据缓存 + 分片下载（按年/成员/时次）+ 断点续传 + MD5 校验
 - [ ] Write unit tests for data fetching and parsing（mock 网络）
@@ -72,7 +72,7 @@
 **Description**: Implement core data processing utilities（v5.9.1 口径）
 - [ ] Create `time_aligner.py` for UTC to local time conversion（本地日 = 当地时钟 00:00-24:00，含丹佛 DST 平移）
 - [ ] Implement `unit_converter.py` for temperature unit standardization
-- [ ] Create `spatial_interpolator.py` with bilinear interpolation（禁止最近邻；从存储的 0.25° 网格裁剪区域（上海 41×41，最终尺寸见 T03 规整策略）提取站点周边 2×2 邻域插值）
+- [ ] Create `spatial_interpolator.py` with bilinear interpolation（禁止最近邻；从存储的 0.25° 网格裁剪区域（上海 41×41）提取站点周边 2×2 邻域插值）
 - [ ] Implement `elevation_corrector.py` with standard lapse rate（Γ = 0.0065 K/m，作用于 TMAX/TMIN 日极值特征）
 - [ ] Add `feature_extractor.py`：
   - 日极值 = **完全包含（⊆ 本地日）**的 6h TMAX/TMIN 窗口极值（非相交窗口）
