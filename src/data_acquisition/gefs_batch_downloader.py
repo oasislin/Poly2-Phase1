@@ -9,6 +9,7 @@ pending -> downloading -> downloaded -> cropped -> raw_ready -> (user_check=move
 
 import csv
 import logging
+import shutil
 import time
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
@@ -210,8 +211,10 @@ class GEFSBatchDownloader:
 
         Resume granularity (do NOT re-implement byte-level resume here):
         - across runs: the CSV state machine skips years already `download=done`;
-        - within a year: GEFSFetcher memoizes per-(init, member, variable) and
-          Herbie's own `save_dir` cache skips files it already has.
+        - within a year: a per-init shard is skipped if its `.nc` + `.nc.md5`
+          sidecar exist and the recorded MD5 still verifies (corrupt shards are
+          re-downloaded); otherwise GEFSFetcher memoizes per-(init, member,
+          variable) and Herbie's own `save_dir` cache skips files it already has.
         """
         init_start = date(year - 1, 12, 31)
         init_end = date(year, 12, 30)
@@ -225,6 +228,21 @@ class GEFSBatchDownloader:
             init_day = init_start
             while init_day <= init_end:
                 target_date = init_day + timedelta(days=1)
+                out_path = out_dir / f"{init_day:%Y%m%d}.nc"
+                md5_path = out_dir / f"{init_day:%Y%m%d}.nc.md5"
+
+                # Resume: a shard already on disk that passes its recorded MD5
+                # is skipped (no re-download / re-decode / re-write).
+                if out_path.exists() and md5_path.exists():
+                    if GEFSFetcher.verify_file_md5(
+                        out_path, md5_path.read_text().strip()
+                    ):
+                        init_day += timedelta(days=1)
+                        continue
+                    # corrupted / half-written -> delete and re-download
+                    out_path.unlink()
+                    md5_path.unlink()
+
                 windows = self.fetcher.select_contained_windows(
                     datetime(init_day.year, init_day.month, init_day.day, 0, 0),
                     target_date,
@@ -244,22 +262,26 @@ class GEFSBatchDownloader:
                     cycles=[0],
                     forecast_hours=windows,
                 )
-                out_path = out_dir / f"{init_day:%Y%m%d}.nc"
                 ds.to_netcdf(out_path, engine="scipy")
+                md5_path.write_text(GEFSFetcher.calculate_md5(out_path))
                 init_day += timedelta(days=1)
 
     def _default_crop_year(self, year: int) -> None:
-        """Persist staged cropped data into the processed tree and verify it
-        round-trips through xarray. crop=done is only written after the data is
-        actually on disk and re-openable."""
+        """Persist staged cropped data into the processed tree, verify it
+        round-trips through xarray, then delete the staged copy to free raw-side
+        space. crop=done is only written after the data is on disk, re-openable,
+        and the staged copy is cleaned up."""
         staging_dir = self.raw_cache_dir / "cropped" / str(year)
         for station in self.stations:
             src_dir = staging_dir / station
             dst_dir = self.processed_dir / str(year) / station
             dst_dir.mkdir(parents=True, exist_ok=True)
 
-            files = sorted(src_dir.glob("*.nc"))
+            files = sorted(src_dir.glob("*.nc")) if src_dir.exists() else []
             if not files:
+                # idempotent resume: already cropped (staged cleaned), skip
+                if list(dst_dir.glob("*.nc")):
+                    continue
                 raise FileNotFoundError(
                     f"no staged cropped data for {station} {year} under {src_dir}"
                 )
@@ -270,6 +292,10 @@ class GEFSBatchDownloader:
                 # verify round-trip before counting this file as cropped
                 _ = xr.open_dataset(dst, engine="scipy")
             logger.info(f"Cropped {station} {year}: {len(files)} files -> {dst_dir}")
+            # free raw-side space: staged copy is now redundant
+            shutil.rmtree(src_dir)
+        if staging_dir.exists() and not any(staging_dir.iterdir()):
+            staging_dir.rmdir()
 
     def run(
         self,

@@ -235,3 +235,62 @@ class TestDefaultDownloadCrop:
 
         with pytest.raises(FileNotFoundError):
             downloader._default_crop_year(2019)
+
+    def test_download_resume_skips_verified_shards(self, tmp_path):
+        fetcher = RecordingFetcher(only_target=date(2019, 7, 2))
+        downloader = self._downloader(tmp_path, fetcher)
+
+        downloader._default_download_year(2019)
+        assert len(fetcher.download_calls) == 1
+
+        staged = tmp_path / "raw" / "cropped" / "2019" / "shanghai"
+        assert len(list(staged.glob("*.nc"))) == 1
+        assert len(list(staged.glob("*.nc.md5"))) == 1
+
+        # re-run: verified shard is skipped, no re-download
+        downloader._default_download_year(2019)
+        assert len(fetcher.download_calls) == 1
+
+    def test_download_redownloads_on_md5_mismatch(self, tmp_path):
+        fetcher = RecordingFetcher(only_target=date(2019, 7, 2))
+        downloader = self._downloader(tmp_path, fetcher)
+
+        downloader._default_download_year(2019)
+        staged = tmp_path / "raw" / "cropped" / "2019" / "shanghai"
+        nc = list(staged.glob("*.nc"))[0]
+        # corrupt the .nc but keep the .md5 sidecar
+        nc.write_bytes(b"corrupted")
+
+        downloader._default_download_year(2019)
+        # corrupted shard re-downloaded and restored to a valid netCDF
+        assert len(fetcher.download_calls) == 2
+        xr.open_dataset(nc, engine="scipy")
+
+    def test_crop_cleans_staged_data(self, tmp_path):
+        fetcher = RecordingFetcher(only_target=date(2019, 7, 2))
+        downloader = self._downloader(tmp_path, fetcher)
+
+        downloader._default_download_year(2019)
+        staged_station = tmp_path / "raw" / "cropped" / "2019" / "shanghai"
+        assert staged_station.exists()
+
+        downloader._default_crop_year(2019)
+        # staged copy cleaned, processed preserved + readable
+        assert not staged_station.exists()
+        out_dir = tmp_path / "processed" / "2019" / "shanghai"
+        files = list(out_dir.glob("*.nc"))
+        assert len(files) == 1
+        ds = xr.open_dataset(files[0], engine="scipy")
+        assert "tmax" in ds.data_vars
+
+    def test_crop_idempotent_rerun(self, tmp_path):
+        fetcher = RecordingFetcher(only_target=date(2019, 7, 2))
+        downloader = self._downloader(tmp_path, fetcher)
+
+        downloader._default_download_year(2019)
+        downloader._default_crop_year(2019)
+        # second crop run: staged gone but processed present -> skip, no error
+        downloader._default_crop_year(2019)
+
+        out_dir = tmp_path / "processed" / "2019" / "shanghai"
+        assert len(list(out_dir.glob("*.nc"))) == 1
