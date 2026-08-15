@@ -36,8 +36,9 @@ def make_fake_forecast_ds(
     times=None,
     member=None,
     step_hours=(6, 12),
+    variable="t2m",
 ):
-    """Build a synthetic reforecast-style Dataset (t2m over time/lat/lon)."""
+    """Build a synthetic reforecast-style Dataset (one var over time/lat/lon)."""
     lats = np.arange(lat_range[0], lat_range[1] + 0.5, 0.5)
     lons = np.arange(lon_range[0], lon_range[1] + 0.5, 0.5)
     if times is None:
@@ -45,12 +46,16 @@ def make_fake_forecast_ds(
     rng = np.random.default_rng(42)
     data = rng.random((len(times), len(lats), len(lons)))
     ds = xr.Dataset(
-        {"t2m": (("time", "latitude", "longitude"), data)},
+        {variable: (("time", "latitude", "longitude"), data)},
         coords={"time": times, "latitude": lats, "longitude": lons},
     )
     if member is not None:
         ds = ds.expand_dims(member=[member])
     return ds
+
+
+# GEFS decodes tmax_2m -> tmax and tmin_2m -> tmin; the mock mirrors that.
+VARIABLE_DECODE = {"tmax_2m": "tmax", "tmin_2m": "tmin"}
 
 
 class MockHerbie:
@@ -93,7 +98,8 @@ class MockHerbie:
         if self.fail_xarray > 0:
             self.fail_xarray -= 1
             raise ConnectionError("simulated transient network error")
-        return make_fake_forecast_ds(step_hours=(6, 12))
+        var = VARIABLE_DECODE.get(self.variable_level, "t2m")
+        return make_fake_forecast_ds(step_hours=(6, 12), variable=var)
 
 
 @pytest.fixture(autouse=True)
@@ -141,11 +147,35 @@ class TestDownloadReforecast:
             cycles=[0],
         )
         assert isinstance(ds, xr.Dataset)
-        assert "t2m" in ds.data_vars
+        assert "tmax" in ds.data_vars
         assert "latitude" in ds.coords
         assert "longitude" in ds.coords
         assert "time" in ds.coords
         assert ds.sizes["member"] == 1
+
+    def test_returns_both_tmax_and_tmin(self):
+        fetcher = make_fetcher()
+        ds = fetcher.download_reforecast(
+            region_bounds=SHANGHAI,
+            date_range=(date(2019, 1, 1), date(2019, 1, 1)),
+            members=[0],
+            cycles=[0],
+        )
+        assert "tmax" in ds.data_vars
+        assert "tmin" in ds.data_vars
+
+    def test_five_members_build_member_dimension(self):
+        fetcher = make_fetcher()
+        ds = fetcher.download_reforecast(
+            region_bounds=SHANGHAI,
+            date_range=(date(2019, 1, 1), date(2019, 1, 1)),
+            members=[0, 1, 2, 3, 4],
+            cycles=[0],
+        )
+        assert ds.sizes["member"] == 5
+        assert list(ds.member.values) == [0, 1, 2, 3, 4]
+        # one (day, cycle) block -> 2 forecast hours, not 5 members x 2
+        assert ds.sizes["time"] == 2
 
     def test_iterates_all_default_cycles(self):
         fetcher = make_fetcher()
@@ -154,23 +184,22 @@ class TestDownloadReforecast:
             date_range=(date(2019, 1, 1), date(2019, 1, 1)),
             members=[0],
         )
-        # 4 cycles (00/06/12/18) x 1 member x 1 day
-        assert len(MockHerbie.instances) == len(REFORECAST_CYCLES)
-        cycles_seen = sorted(h.date.hour for h in MockHerbie.instances)
+        # 4 cycles (00/06/12/18) x 1 member x 1 day x 2 variables
+        assert len(MockHerbie.instances) == len(REFORECAST_CYCLES) * 2
+        cycles_seen = sorted(set(h.date.hour for h in MockHerbie.instances))
         assert cycles_seen == list(REFORECAST_CYCLES)
 
-    def test_uses_reforecast_model_and_variable(self):
+    def test_uses_reforecast_model_and_both_variables(self):
         fetcher = make_fetcher()
         fetcher.download_reforecast(
             region_bounds=SHANGHAI,
             date_range=(date(2019, 1, 1), date(2019, 1, 1)),
             members=[0],
             cycles=[0],
-            variable="tmp_2m",
         )
-        h = MockHerbie.instances[0]
-        assert h.model == "gefs_reforecast"
-        assert h.variable_level == "tmp_2m"
+        variable_levels = sorted({h.variable_level for h in MockHerbie.instances})
+        assert variable_levels == ["tmax_2m", "tmin_2m"]
+        assert all(h.model == "gefs_reforecast" for h in MockHerbie.instances)
 
     def test_caches_repeated_calls(self):
         fetcher = make_fetcher()
@@ -207,7 +236,7 @@ class TestDownloadReforecast:
             members=[0],
             cycles=[0],
         )
-        assert len(MockHerbie.instances) == 2  # one per day
+        assert len(MockHerbie.instances) == 4  # 2 days x 2 variables
         assert ds.sizes["time"] == 4  # 2 days x 2 forecast hours from fake
 
     def test_invalid_member_raises(self):
@@ -427,7 +456,7 @@ def test_network_reforecast_single_message(tmp_path):
         )
     finally:
         gf.Herbie = real_herbie
-    # Real GEFS TMAX messages decode as "tmax" (mock scaffolding uses "t2m")
+    # Real GEFS TMAX/TMIN messages decode as "tmax"/"tmin" (mock mirrors this)
     assert "tmax" in ds.data_vars
     assert ds.sizes["time"] >= 1
     assert ds.latitude.min() >= 25

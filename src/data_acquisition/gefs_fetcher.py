@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """
-GEFS data fetcher (Task 1.2, T01 slice).
+GEFS data fetcher (Task 1.2, T01+T02 slice).
 
 Downloads GEFS reforecast data via Herbie (PyPI package `herbie-data`),
 crops to a requested region, and returns an xarray Dataset.
 
 T01 scope: minimal reforecast path (tmax_2m, basic cropping, cycle loop).
-Caching / retry / realtime / longitude-wrapping belong to T02-T06.
+T02 scope: dual-variable (tmax_2m + tmin_2m) and 5-member ensemble
+protocol (c00 + p01-p04) merged into a member dimension.
+Caching / retry / realtime / longitude-wrapping belong to T03-T06.
 """
 
 from datetime import date, datetime, timedelta
@@ -22,7 +24,14 @@ DEFAULT_REGIONS = {
 
 REFORECAST_CYCLES = (0, 6, 12, 18)
 
-DEFAULT_VARIABLE = "tmax_2m"
+# 5-member ensemble protocol (v5.9): c00 (member 0) + p01-p04 (members 1-4).
+# Training (reforecast) and prediction (realtime) MUST use the same set;
+# any other member id is invalid.
+VALID_MEMBERS = (0, 1, 2, 3, 4)
+
+# Reforecast stores TMAX and TMIN in separate files; T02 downloads both and
+# merges them into one Dataset (decoded names tmax / tmin).
+REFORECAST_VARIABLES = ("tmax_2m", "tmin_2m")
 
 # variable_level (file naming) -> regex matching wgrib2-style idx content
 VARIABLE_SEARCH = {
@@ -52,12 +61,19 @@ class GEFSFetcher:
         date_range,
         members,
         cycles=None,
-        variable=DEFAULT_VARIABLE,
         forecast_hours=None,
     ):
-        """Download GEFS reforecast for every (day, cycle, member) and
-        concatenate the region-cropped Datasets along the time dimension."""
-        self._validate(date_range, region_bounds)
+        """Download GEFS reforecast for every (day, cycle) and merge both
+        variables (tmax_2m, tmin_2m) across the requested members.
+
+        Returns a Dataset with `tmax`/`tmin` data_vars and
+        time/latitude/longitude/member coordinates. Members must be a subset
+        of the v5.9 5-member protocol {0,1,2,3,4} (c00 + p01-p04); anything
+        else raises GEFSValidationError. For each (day, cycle) the members are
+        concatenated along the `member` dimension first, then the (day, cycle)
+        blocks are concatenated along `time`.
+        """
+        self._validate(date_range, region_bounds, members)
         start, end = date_range
         if cycles is None:
             cycles = REFORECAST_CYCLES
@@ -65,31 +81,36 @@ class GEFSFetcher:
         days = [
             start + timedelta(days=i) for i in range((end - start).days + 1)
         ]
-        datasets = []
+        blocks = []
         for day in days:
             for cycle in cycles:
+                init_time = datetime(day.year, day.month, day.day, cycle)
+                member_dss = []
                 for member in members:
-                    init_time = datetime(
-                        day.year, day.month, day.day, cycle
+                    var_dss = []
+                    for variable in REFORECAST_VARIABLES:
+                        h = Herbie(
+                            init_time,
+                            model="gefs_reforecast",
+                            member=member,
+                            fxx=0,
+                            variable_level=variable,
+                            save_dir=self.cache_dir,
+                            verbose=self.verbose,
+                        )
+                        search = self._build_search(variable, forecast_hours)
+                        h.download(search=search)
+                        ds = h.xarray(search=search)
+                        ds = self.extract_region(
+                            ds, region_bounds["lat"], region_bounds["lon"]
+                        )
+                        var_dss.append(ds)
+                    member_ds = xr.merge(var_dss).expand_dims(
+                        member=[member]
                     )
-                    h = Herbie(
-                        init_time,
-                        model="gefs_reforecast",
-                        member=member,
-                        fxx=0,
-                        variable_level=variable,
-                        save_dir=self.cache_dir,
-                        verbose=self.verbose,
-                    )
-                    search = self._build_search(variable, forecast_hours)
-                    h.download(search=search)
-                    ds = h.xarray(search=search)
-                    ds = self.extract_region(
-                        ds, region_bounds["lat"], region_bounds["lon"]
-                    )
-                    ds = ds.expand_dims(member=[member])
-                    datasets.append(ds)
-        return xr.concat(datasets, dim="time")
+                    member_dss.append(member_ds)
+                blocks.append(xr.concat(member_dss, dim="member"))
+        return xr.concat(blocks, dim="time")
 
     @staticmethod
     def _build_search(variable, forecast_hours):
@@ -114,7 +135,7 @@ class GEFSFetcher:
         )
 
     @staticmethod
-    def _validate(date_range, region_bounds):
+    def _validate(date_range, region_bounds, members=None):
         start, end = date_range
         if start > end:
             raise GEFSValidationError(
@@ -125,3 +146,10 @@ class GEFSFetcher:
             raise GEFSValidationError(
                 f"invalid latitude bounds {region_bounds['lat']}"
             )
+        if members is not None:
+            invalid = [m for m in members if m not in VALID_MEMBERS]
+            if invalid:
+                raise GEFSValidationError(
+                    f"invalid ensemble member(s) {invalid}; "
+                    f"allowed members (c00+p01-p04) are {list(VALID_MEMBERS)}"
+                )
