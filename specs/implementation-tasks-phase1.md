@@ -42,19 +42,19 @@
 **Priority**: High
 **Estimate**: 3 days
 **Dependencies**: None
-**进度**：T01（GEFS reforecast 下载最小路径）已完成（2026-08-14）；T02（双变量 + 5 成员协议）已完成（2026-08-15）；T03-T07 待开始。
+**进度**：T01-T07 全部分拆 tickets 已完成（2026-08-15），Task 1.2 验收全部通过（100% 完成）。
 
 **Description**: Implement GEFS data download and preprocessing（v5.9.1 口径）
-- [ ] Create `gefs_fetcher.py` with Herbie integration（注意：PyPI 包名为 `herbie-data`，`herbie` 为无关包）
-- [ ] 下载变量：`tmax_2m` / `tmin_2m`（6h 窗口 TMAX/TMIN，非 tmp_2m）
-- [ ] 支持 reforecast（训练，2000-2019）与 realtime（预测）双模式
-- [ ] **起报时次**：reforecast 仅 00Z 单时次（AWS 实证，v5.9.1 §1）；realtime 多时次另计
-- [ ] **成员协议**：训练与预测均使用 c00 + p01-p04 共 5 成员（AWS reforecast 实证仅存 5 成员，2005/2015/2019 验证一致）
-- [ ] **窗口下载**：每 init 下载覆盖目标本地日的 6h 窗口子集（每变量/成员 3-5 个窗口）
-- [ ] **区域裁剪流程**：下载后立即裁剪上海/丹佛区域（真实网格 0.25°，上海 25–35N/115–125E 裁剪 = 41×41 格点；**保持 41×41，不规整**）→ 输出"裁剪完成可移走 raw"信号 → 用户移走原始全球文件后继续下一分片
-- [ ] 实现 GRIB2 → xarray 转换（含经度 0-360°/±180° 处理）
-- [ ] 数据缓存 + 分片下载（按年/成员/时次）+ 断点续传 + MD5 校验
-- [ ] Write unit tests for data fetching and parsing（mock 网络）
+- [x] Create `gefs_fetcher.py` with Herbie integration（注意：PyPI 包名为 `herbie-data`，`herbie` 为无关包）
+- [x] 下载变量：`tmax_2m` / `tmin_2m`（6h 窗口 TMAX/TMIN，非 tmp_2m）
+- [x] 支持 reforecast（训练，2000-2019）与 realtime（预测）双模式
+- [x] **起报时次**：reforecast 仅 00Z 单时次（AWS 实证，v5.9.1 §1）；realtime 多时次另计
+- [x] **成员协议**：训练与预测均使用 c00 + p01-p04 共 5 成员（AWS reforecast 实证仅存 5 成员，2005/2015/2019 验证一致）
+- [x] **窗口下载**：每 init 下载覆盖目标本地日的 6h 窗口子集（每变量/成员 3-5 个窗口）
+- [x] **区域裁剪流程**：下载后立即裁剪上海/丹佛区域（真实网格 0.25°，上海 25–35N/115–125E 裁剪 = 41×41 格点；**保持 41×41，不规整**）→ 输出"裁剪完成可移走 raw"信号 → 用户移走原始全球文件后继续下一分片
+- [x] 实现 GRIB2 → xarray 转换（含经度 0-360°/±180° 处理）
+- [x] 数据缓存 + 分片下载（按年/成员/时次）+ 断点续传 + MD5 校验
+- [x] Write unit tests for data fetching and parsing（mock 网络）
 
 **Acceptance Criteria**:
 - 可下载 reforecast（2000-2019）与 realtime 的 tmax_2m/tmin_2m 6h 窗口数据
