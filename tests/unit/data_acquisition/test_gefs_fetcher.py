@@ -185,7 +185,7 @@ class TestDownloadReforecast:
             date_range=(date(2019, 1, 1), date(2019, 1, 1)),
             members=[0],
         )
-        # 4 cycles (00/06/12/18) x 1 member x 1 day x 2 variables
+        # reforecast is 00Z-only (v5.9.1): 1 cycle x 1 member x 1 day x 2 variables
         assert len(MockHerbie.instances) == len(REFORECAST_CYCLES) * 2
         cycles_seen = sorted(set(h.date.hour for h in MockHerbie.instances))
         assert cycles_seen == list(REFORECAST_CYCLES)

@@ -1,6 +1,6 @@
 # AGENTS.md
 
-本仓库：Polymarket 温度预测系统（Phase 1，高精度物理概率模型）。当前执行规格以《项目执行文件 v5.7.md》为准；需求来源《项目方案：Polymarket 温度市场量化投注系统 (v2.2).md》。
+本仓库：Polymarket 温度预测系统（Phase 1，高精度物理概率模型）。当前执行规格以《项目执行文件 v5.9.1(细化版).md》为准（v5.9 的更新版，无冲突）；需求来源《项目方案：Polymarket 温度市场量化投注系统 (v2.2).md》。
 
 ## 规格更新流程（触发即执行）
 
@@ -22,6 +22,12 @@
 - 修改文件时避免重写整个文件，始终优先使用 `edit` 工具进行细粒度、精确的 diff 修改。
 - 若文件创建或重构的规模很大，将任务拆分为多个步骤/函数分步完成。
 - 工具调用前后的注释与说明保持简洁。
+
+## 数据管道验证工作流（Task 1.2 GEFS，硬性）
+
+- **每张 ticket 完成时必跑真实冒烟**：`RUN_NETWORK_TESTS=1 python -m pytest tests/unit/data_acquisition/test_gefs_fetcher.py::test_network_reforecast_single_message -q`。ticket 不涉及网络路径时可豁免，但须在交付说明中注明理由。**mock 全绿 ≠ 真实网络可用**（T01 与 T02 均已实证：mock 绿但真实 AWS 路径坏）。
+- **外部契约必须钉成契约测试**：GRIB idx 搜索正则、真实解码变量名（tmax/tmin）、网格方向/分辨率等，必须用「观测到的真实数据字面量」写成快速单元测试（参考 `TestBuildSearch`），mock 不得覆盖这些契约。
+- **mock 仅 mirror 已验证的契约**：`MockHerbie` / `make_fake_forecast_ds` 只反映真实联网验证过的行为，不得凭空假设。
 
 ## 其他
 

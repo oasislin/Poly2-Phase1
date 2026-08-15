@@ -22,9 +22,10 @@ DEFAULT_REGIONS = {
     "denver": {"lat": (35, 45), "lon": (-110, -100)},
 }
 
-REFORECAST_CYCLES = (0, 6, 12, 18)
+# Reforecast is 00Z-only (v5.9.1 §1): 06/12/18Z do not exist on AWS.
+REFORECAST_CYCLES = (0,)
 
-# 5-member ensemble protocol (v5.9): c00 (member 0) + p01-p04 (members 1-4).
+# 5-member ensemble protocol (v5.9.1): c00 (member 0) + p01-p04 (members 1-4).
 # Training (reforecast) and prediction (realtime) MUST use the same set;
 # any other member id is invalid.
 VALID_MEMBERS = (0, 1, 2, 3, 4)
