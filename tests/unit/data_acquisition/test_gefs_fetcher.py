@@ -606,6 +606,35 @@ class TestRetry:
             fetcher._execute_with_retry(raises_type_error)
         assert len(calls) == 1  # not retried
 
+    def test_retries_herbie_runtime_error_wrapping_oserror(self):
+        # Herbie wraps network/IO failures as RuntimeError (cause = OSError);
+        # these must still be retried (regression from R04's OSError narrowing).
+        fetcher = make_fetcher(max_retries=3, backoff_base=0.01)
+        calls = []
+
+        def raises_herbie_style():
+            calls.append(1)
+            try:
+                raise OSError("network down")
+            except OSError as exc:
+                raise RuntimeError("Processing failed") from exc
+
+        with pytest.raises(GEFSDownloadError):
+            fetcher._execute_with_retry(raises_herbie_style)
+        assert len(calls) == 3  # retried max_retries times
+
+    def test_does_not_retry_runtime_error_without_oserror_cause(self):
+        fetcher = make_fetcher(max_retries=3, backoff_base=0.01)
+        calls = []
+
+        def raises_runtime_bug():
+            calls.append(1)
+            raise RuntimeError("genuine bug, no IO cause")
+
+        with pytest.raises(RuntimeError):
+            fetcher._execute_with_retry(raises_runtime_bug)
+        assert len(calls) == 1  # not retried
+
 
 # ---------------------------------------------------------------------------
 # Contained 6h window selection (T05)

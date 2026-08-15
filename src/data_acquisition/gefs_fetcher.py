@@ -58,8 +58,9 @@ class GEFSDownloadError(Exception):
 
 # Transient errors worth retrying: network/IO failures only. Programming errors
 # (TypeError, KeyError, GEFSValidationError, ...) must propagate immediately and
-# not be masked by a retry loop. OSError also covers requests.exceptions
-# (RequestException subclasses IOError).
+# not be masked by a retry loop. OSError covers requests.exceptions
+# (RequestException subclasses IOError). Herbie wraps those IO errors as
+# RuntimeError, so `_is_retryable` unwraps that case too.
 RETRYABLE_EXCEPTIONS = (OSError,)
 
 
@@ -80,13 +81,27 @@ class GEFSFetcher:
         self.verbose = verbose
         self._cache = {}
 
+    @staticmethod
+    def _is_retryable(exc) -> bool:
+        """True for transient network/IO failures.
+
+        Herbie wraps requests/IO errors as RuntimeError (its ``__cause__`` is the
+        original OSError); unwrap those so they retry too. A RuntimeError with a
+        non-OSError cause (or no cause) is a genuine bug and must propagate.
+        """
+        return isinstance(exc, OSError) or (
+            isinstance(exc, RuntimeError) and isinstance(exc.__cause__, OSError)
+        )
+
     def _execute_with_retry(self, func):
         """Execute func with exponential backoff retry on transient network/IO errors."""
         last_exc = None
         for attempt in range(self.max_retries):
             try:
                 return func()
-            except RETRYABLE_EXCEPTIONS as exc:
+            except (OSError, RuntimeError) as exc:
+                if not self._is_retryable(exc):
+                    raise
                 last_exc = exc
                 if attempt < self.max_retries - 1:
                     sleep_s = self.backoff_base * (2 ** attempt)
@@ -107,7 +122,22 @@ class GEFSFetcher:
                         raise OSError(f"MD5 mismatch for downloaded file {p}")
             return path
 
-        return self._execute_with_retry(_attempt)
+        def _attempt_with_cleanup():
+            try:
+                return _attempt()
+            except Exception:
+                # Herbie leaves a partial subset file when a download dies
+                # mid-stream; drop it so the retry re-downloads instead of
+                # reusing the truncated file (Herbie skips existing files).
+                try:
+                    local = h.get_localFilePath(search)
+                    if local.exists():
+                        local.unlink()
+                except Exception:
+                    pass
+                raise
+
+        return self._execute_with_retry(_attempt_with_cleanup)
 
     def _xarray_with_retry(self, h, search=None):
         def _attempt():
