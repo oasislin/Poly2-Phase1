@@ -8,6 +8,7 @@ skipped unless RUN_NETWORK_TESTS=1 is set.
 """
 
 import os
+import re
 from datetime import date, datetime
 from pathlib import Path
 
@@ -269,6 +270,31 @@ class TestDownloadReforecast:
 
 
 # ---------------------------------------------------------------------------
+# _build_search (idx search regex, pinned to observed real GEFS idx content)
+# ---------------------------------------------------------------------------
+
+class TestBuildSearch:
+    def test_tmin_uses_min_fcst(self):
+        # Real GEFS idx line for tmin_2m is "... hour min fcst" (not max).
+        assert re.fullmatch(
+            GEFSFetcher._build_search("tmin_2m", [3]),
+            "TMIN:2 m above ground:0-3 hour min fcst",
+        )
+
+    def test_tmax_uses_max_fcst(self):
+        assert re.fullmatch(
+            GEFSFetcher._build_search("tmax_2m", [3]),
+            "TMAX:2 m above ground:0-3 hour max fcst",
+        )
+
+    def test_six_hour_window(self):
+        assert re.fullmatch(
+            GEFSFetcher._build_search("tmin_2m", [6]),
+            "TMIN:2 m above ground:0-6 hour min fcst",
+        )
+
+
+# ---------------------------------------------------------------------------
 # download_realtime
 # ---------------------------------------------------------------------------
 
@@ -458,6 +484,7 @@ def test_network_reforecast_single_message(tmp_path):
         gf.Herbie = real_herbie
     # Real GEFS TMAX/TMIN messages decode as "tmax"/"tmin" (mock mirrors this)
     assert "tmax" in ds.data_vars
+    assert "tmin" in ds.data_vars
     assert ds.sizes["time"] >= 1
     assert ds.latitude.min() >= 25
     assert ds.longitude.max() <= 125

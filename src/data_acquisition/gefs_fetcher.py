@@ -115,12 +115,16 @@ class GEFSFetcher:
     @staticmethod
     def _build_search(variable, forecast_hours):
         """Build a regex matching idx lines (wgrib2 style) for the requested
-        variable and forecast hours; falls back to the variable name itself."""
+        variable and forecast hours; falls back to the variable name itself.
+
+        Real idx lines differ by fcst type: TMAX is "X-Y hour max fcst" while
+        TMIN is "X-Y hour min fcst"."""
         base = VARIABLE_SEARCH.get(variable, variable)
         if not forecast_hours:
             return base
+        fcst = "min" if "tmin" in variable else "max"
         windows = "|".join(
-            (f"{h - 6}-{h} hour max fcst" if h % 6 == 0 else f"{h - 3}-{h} hour max fcst")
+            (f"{h - 6}-{h} hour {fcst} fcst" if h % 6 == 0 else f"{h - 3}-{h} hour {fcst} fcst")
             for h in forecast_hours
         )
         return rf"{base}:(?:{windows})"
