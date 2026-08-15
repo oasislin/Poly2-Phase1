@@ -1,5 +1,7 @@
 # System Architecture
 
+> ⚠️ **已废弃（早期 v2.x 设计文档，保留仅作历史参考）**：本文内容与现行 v5.9 执行规格不一致（偏态高斯 EMOS 等已废弃）。现行权威规格见 `specs/phase1-specification-complete.md` 与 `specs/implementation-tasks-phase1.md`。
+
 ## Overview
 
 The Polymarket Temperature Prediction System is organized into modular components with clear interfaces. The system follows a pipeline architecture where data flows through sequential processing stages.

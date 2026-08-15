@@ -1,6 +1,6 @@
 # Implementation Tasks: Phase 1
 
-> **对齐 v5.7 执行规格（2026-08-14）**：Task 1.2 起按 v5.7 口径执行（时效分层 EMOS、6h 窗口 TMAX/TMIN 特征、5 成员集合、68 模型/站矩阵）。**Task 1.1 为已完成历史记录，冻结不改。**
+> **对齐 v5.9 执行规格（2026-08-15）**：Task 1.2 起按 v5.9 口径执行（高斯 EMOS + 气候学方差 Floor、6h 窗口 TMAX/TMIN 特征、5 成员集合、20 模型/站矩阵 + 参数插值）。**Task 1.1 为已完成历史记录，冻结不改。**
 
 ## Phase 1A: Core Infrastructure (Weeks 1-2)
 
@@ -42,8 +42,9 @@
 **Priority**: High
 **Estimate**: 3 days
 **Dependencies**: None
+**进度**：T01（GEFS reforecast 下载最小路径）已完成（2026-08-14）；T02-T07 待开始。
 
-**Description**: Implement GEFS data download and preprocessing（v5.7 口径）
+**Description**: Implement GEFS data download and preprocessing（v5.9 口径；管道口径 v5.7→v5.9 不变）
 - [ ] Create `gefs_fetcher.py` with Herbie integration（注意：PyPI 包名为 `herbie-data`，`herbie` 为无关包）
 - [ ] 下载变量：`tmax_2m` / `tmin_2m`（6h 窗口 TMAX/TMIN，非 tmp_2m）
 - [ ] 支持 reforecast（训练，2000-2019）与 realtime（预测）双模式
@@ -67,10 +68,10 @@
 **Estimate**: 4 days
 **Dependencies**: Task 1.1, 1.2
 
-**Description**: Implement core data processing utilities（v5.7 口径）
+**Description**: Implement core data processing utilities（v5.9 口径；特征提取口径 v5.7→v5.9 不变）
 - [ ] Create `time_aligner.py` for UTC to local time conversion（本地日 = 当地时钟 00:00-24:00，含丹佛 DST 平移）
 - [ ] Implement `unit_converter.py` for temperature unit standardization
-- [ ] Create `spatial_interpolator.py` with bilinear interpolation（禁止最近邻）
+- [ ] Create `spatial_interpolator.py` with bilinear interpolation（禁止最近邻；从存储的 21×21 区域提取站点周边 2×2 邻域插值）
 - [ ] Implement `elevation_corrector.py` with standard lapse rate（Γ = 0.0065 K/m，作用于 TMAX/TMIN 日极值特征）
 - [ ] Add `feature_extractor.py`：
   - 日极值 = **完全包含（⊆ 本地日）**的 6h TMAX/TMIN 窗口极值（非相交窗口）
@@ -106,22 +107,22 @@
 
 ## Phase 1B: Model Implementation (Weeks 3-4)
 
-### Task 2.1: Skewed Gaussian Distribution
+### Task 2.1: Gaussian EMOS Distribution（带气候学方差 Floor）
 **Priority**: High
 **Estimate**: 3 days
-**Dependencies**: None
+**Dependencies**: Task 1.1
 
-**Description**: Implement skewed Gaussian probability distribution
-- [ ] Create `skewed_gaussian.py` with μ, σ, skewness parameters
-- [ ] Implement PDF, CDF, and quantile functions
-- [ ] Add parameter estimation from data
-- [ ] Implement CRPS calculation for skewed Gaussian
+**Description**: Implement Gaussian EMOS distribution with climatological variance floor（v5.9 口径；废弃偏态）
+- [ ] Create `climatology.py` computing σ_clim(d)/μ_clim(d)（31 天滑动窗 × 2000-2018 实测，逐日平滑，严格 OOS）
+- [ ] Implement Gaussian PDF, CDF, and quantile functions（无 skewness）
+- [ ] Implement closed-form CRPS for Gaussian（Gneiting 公式）
+- [ ] 连接函数：μ = a + b·T̄_ens；σ² = c² + d²·S²_ens + σ²_clim(d)（平方参数化）
 - [ ] Write mathematical property tests
 
 **Acceptance Criteria**:
-- Distribution functions numerically stable
-- CRPS calculation matches reference implementation
-- Parameter estimation converges correctly
+- σ_clim(d) 计算仅用 2000-2018，不碰 2019 验证集
+- Gaussian CRPS 匹配参考实现
+- 连接函数 σ² 天然 ≥ σ²_clim(d)（Floor 生效）
 - Tests verify mathematical properties
 
 ### Task 2.2: EMOS Model Training
@@ -129,21 +130,22 @@
 **Estimate**: 4 days
 **Dependencies**: Task 2.1, 1.3
 
-**Description**: Implement EMOS calibration for skewed Gaussian（v5.7 口径）
-- [ ] Create `emos_trainer.py` with CRPS minimization
-- [ ] **模型矩阵**：季节（DJF/MAM/JJA/SON）× 时效节点 → 68 模型/站点（最高温 9 节点 {54,48,42,36,30,24,18,12,6} + 最低温 8 节点 {48,42,36,30,24,18,12,6}），2 站共 136 个
+**Description**: Implement EMOS calibration for Gaussian with variance floor（v5.9 口径）
+- [ ] Create `emos_trainer.py` with closed-form CRPS minimization（L-BFGS-B）
+- [ ] **模型矩阵**：季节 × 时效节点 → 20 模型/站点（最高温 3 节点 {54,30,6} + 最低温 2 节点 {48,24}），2 站共 40 个
 - [ ] 命名规范 `{StationID}_{Season}_{Max|Min}_lead{Hours}h.pkl`
 - [ ] **Lead Time 归桶**：名义目标时间（最高温 15:00 LT / 最低温 06:00 LT）− init，round_to_nearest_6h
-- [ ] **三级降级**（v5.3）：Level 1 偏态 EMOS → Level 2 标准高斯 → Level 3 气候学；硬触发（优化失败/NaN/超迭代）+ 软触发（训练集 CRPS 无改进）
+- [ ] **两级降级**：Level 1 高斯 EMOS+Floor → Level 2 气候学；硬触发（超迭代/NaN/Inf）+ 软触发（验证集 CRPS 显著劣于气候学）；|c|/|d|>10 仅告警
+- [ ] 优化：仅对 d 加 L2(λ=1e-3)；热启动 (a,b,c,d)=(0,1,0,1) + O(1e-3) 扰动
 - [ ] 训练/预测成员对齐（c00+p01-p04 5 成员）
 - [ ] Implement model persistence with pickle/joblib
 
 **Acceptance Criteria**:
-- 68 模型/站点矩阵正确生成，命名规范正确
+- 20 模型/站点矩阵正确生成，命名规范正确
 - CRPS 随 Lead Time 衰减用**配对统计检验**验收（不显著倒挂视为持平通过）
-- 三级降级正确触发（输入病态数据返回 Level 3 且不崩溃）
-- 各时效分桶独立通过 PIT K-S 检验（p>0.05）
-- MPIW Ratio < 0.9（锐度，相对气候学窄 ≥10%）
+- 两级降级正确触发（输入病态数据返回气候学且不崩溃）
+- 各真实时效节点独立通过 PIT K-S 检验（p>0.05）
+- 极端事件压力测试通过（见 Task 4.1）
 - Models can be saved and loaded
 
 ### Task 2.3: Training Pipeline
@@ -151,12 +153,12 @@
 **Estimate**: 3 days
 **Dependencies**: Task 2.2, 1.4
 
-**Description**: Build complete training pipeline（v5.7 口径）
+**Description**: Build complete training pipeline（v5.9 口径）
 - [ ] Create `training_pipeline.py` orchestrating data→features→training
 - [ ] 验证集双轨：单次留出（训练 2000-2018 / 验证 2019）+ 训练期滚动验证（Rolling-Origin，逐年滚动原点）
 - [ ] 时间墙隔离：训练阶段严禁访问任何验证集数据
 - [ ] Add model versioning with DVC
-- [ ] Create training reports with metrics（CRPS 衰减曲线、PIT、MPIW）
+- [ ] Create training reports with metrics（CRPS 衰减曲线、PIT、极端压力测试报告）
 - [ ] Add automated retraining scheduling
 
 **Acceptance Criteria**:
@@ -172,16 +174,19 @@
 **Estimate**: 3 days
 **Dependencies**: Task 2.2, 1.2
 
-**Description**: Implement base prediction from GEFS features
+**Description**: Implement base prediction from GEFS features（v5.9 口径：高斯 + 插值）
 - [ ] Create `static_predictor.py` loading appropriate seasonal model
-- [ ] Generate skewed Gaussian parameters (μ, σ, skewness)
+- [ ] Generate Gaussian parameters (μ, σ)（无 skewness）
+- [ ] **参数插值**：缺失时效节点在相邻真实节点间线性内插 (a,b,c,d)
+- [ ] **短时效收缩**：最低温 <24h 借用 24h 参数，σ_final = σ_24h × √(L/24)
 - [ ] Add confidence intervals and prediction intervals
 - [ ] Implement batch prediction for multiple stations/dates
 
 **Acceptance Criteria**:
-- Correct model selected by station, season, and temp type
+- Correct model selected by station, season, temp type, and lead time（命中真实节点用真实模型，否则插值）
+- 插值输出 = 端点参数线性组合
+- 短时效收缩公式正确（√(L/24)）
 - Predictions generated within time budget
-- Confidence intervals mathematically correct
 - Batch prediction efficient
 
 ### Task 3.2: Dynamic Correction
@@ -241,18 +246,20 @@
 ### Task 4.1: Validation Metrics
 **Priority**: High
 **Estimate**: 3 days
-**Dependencies**: Task 2.1, 3.1
+**Dependencies**: Task 2.2, 3.1
 
-**Description**: Implement comprehensive validation metrics
+**Description**: Implement comprehensive validation metrics（v5.9 三重验收）
 - [ ] Create `metrics_calculator.py` with CRPS, PIT, Talagrand
-- [ ] Implement PIT histogram calculation and uniformity test
+- [ ] **标准节点验收**：PIT K-S（p>0.05）+ CRPS 衰减配对检验
+- [ ] **插值节点验收**：留出最高温 30h，用 {6h,54h} 插值重建；双断言 CRPS_virtual ≤ 1.05×CRPS_real 且 PIT p>0.05
+- [ ] **极端事件 OOS 压力测试**：2019 池（阈值 2000-2018 分位数），Warm/Cold Tail 对称；双断言 CRPS_model < CRPS_clim 且 90% CI 覆盖率 ≥ 80%
 - [ ] Add Talagrand diagram generation
-- [ ] Create benchmark comparisons (GEFS mean, climatology)
 - [ ] Implement statistical significance testing
 
 **Acceptance Criteria**:
 - CRPS calculation matches reference
 - PIT histogram correctly computed
+- 三重验收全部通过（标准/插值/极端）
 - Talagrand diagram shows spread reliability
 - Statistical tests correctly implemented
 
@@ -394,7 +401,7 @@
 - [ ] Data storage efficient and reliable
 
 ### Model Training
-- [ ] Skewed Gaussian implementation mathematically correct
+- [ ] Gaussian EMOS implementation mathematically correct (with variance floor)
 - [ ] EMOS training reduces CRPS
 - [ ] Separate models for max/min and seasons
 - [ ] Models can be saved and loaded

@@ -1,6 +1,6 @@
 # Polymarket Temperature Prediction System - Phase 1 Complete Specification
 
-> **对齐 v5.7 执行规格（2026-08-14）**：模型架构升级为"季节 $\times$ 时效"二维矩阵（68 模型/站），特征口径为 6h 窗口 TMAX/TMIN 日极值 + 5 成员集合统计。详见《项目执行文件 v5.7.md》。
+> **对齐 v5.9 执行规格（2026-08-15）**：模型架构为"季节 $\times$ 时效"二维矩阵（20 模型/站，高斯 EMOS + 气候学方差 Floor），特征口径为 6h 窗口 TMAX/TMIN 日极值 + 5 成员集合统计；缺失时效节点用参数插值。详见《项目执行文件 v5.9.md》。
 
 ## 1. Project Overview
 
@@ -11,7 +11,7 @@ Build a high-precision physical probability model for Polymarket temperature mar
 - **Data Sources**: Wunderground (ground truth), GEFS (forecasts), real-time observations
 - **Target Cities**: Shanghai (ZSPD) and Denver (KDEN) only
 - **Time Period**: Historical validation (2000-2019)
-- **Model Type**: Skewed Gaussian EMOS with seasonal bucketing
+- **Model Type**: Gaussian EMOS with climatological variance floor, season × lead-time bucketing
 - **Output**: Probability distributions for temperature thresholds
 - **Excluded**: Market microstructure, liquidity analysis, trading execution
 
@@ -39,7 +39,7 @@ Build a high-precision physical probability model for Polymarket temperature mar
                               │
 ┌─────────────────────────────────────────────────────────────┐
 │                    Static Base Model Layer                   │
-│  Skewed Gaussian EMOS trained on GEFS ensemble forecasts     │
+│  Gaussian EMOS (with variance floor) on GEFS ensemble        │
 │  Separate models for max/min temps and DJF/MAM/JJA/SON      │
 └─────────────────────────────────────────────────────────────┘
 ```
@@ -54,7 +54,7 @@ Real-time Observations ──────┘
                              │
                      Model Training (EMOS)
                              │
-                    Static Predictions (μ, σ, skew)
+                    Static Predictions (μ, σ)
                              │
                    Dynamic Correction (hourly updates)
                              │
@@ -77,10 +77,11 @@ Real-time Observations ──────┘
 
 ### 3.2 GEFS Data (Forecast Features)
 - **Source**: AWS Open Data via Herbie library
-- **Type**: Both reforecast (historical) and real-time
-- **Variables**: 2m temperature (t2m) ensemble members
-- **Resolution**: 0.5° × 0.5° grid, 6-hour intervals
-- **Region Selection**: Download only target regions, not global data
+- **Type**: Both reforecast (historical, 00Z-only) and real-time
+- **Variables**: tmax_2m / tmin_2m（6h 窗口 TMAX/TMIN）
+- **Resolution**: 0.25°（前 10 天）→ 0.5°（之后）
+- **Members**: 5 成员 c00+p01-p04（训练/预测同口径）
+- **Region Selection**: Download then crop to target regions
   - Shanghai region: 25°-35°N, 115°-125°E
   - Denver region: 35°-45°N, 100°-110°W
 - **Processing**: Bilinear interpolation + elevation correction
@@ -93,23 +94,24 @@ Real-time Observations ──────┘
 
 ## 4. Model Design
 
-### 4.1 Skewed Gaussian Distribution
-- **Parameters**: μ (mean), σ (standard deviation), skewness
+### 4.1 Gaussian EMOS Distribution（带气候学方差 Floor）
+- **Parameters**: μ (mean), σ (standard deviation)—— 无 skewness
 - **Functions**: PDF, CDF, quantile function
-- **Estimation**: Maximum likelihood or method of moments
-- **CRPS**: Closed-form expression for skewed Gaussian
+- **连接函数**：μ = a + b·T̄_ens；σ² = c² + d²·S²_ens + σ²_clim(d)（平方参数化）
+- **σ_clim(d)**：31 天滑动窗 × 2000-2018 实测，逐日平滑，不参与优化
+- **CRPS**: Closed-form expression for Gaussian（Gneiting 公式）
 
-### 4.2 EMOS Calibration（v5.7 对齐）
+### 4.2 EMOS Calibration（v5.9 对齐）
 - **模型架构**：季节 $\times$ 时效二维矩阵 $M_{s,\Delta t}$（时效分层 EMOS）
-  - 最高温：9 时效节点 {54,48,42,36,30,24,18,12,6}，名义目标 15:00 LT
-  - 最低温：8 时效节点 {48,42,36,30,24,18,12,6}，名义目标 06:00 LT（丹佛随 DST）
-  - 合计 68 模型/站点，2 站共 136 个；命名 `{Station}_{Season}_{Max|Min}_lead{H}h.pkl`
+  - 最高温：3 真实时效节点 {54,30,6}，名义目标 15:00 LT；缺失节点 {12,18,24,36,42,48} 内插
+  - 最低温：2 真实时效节点 {48,24}，名义目标 06:00 LT（丹佛随 DST）；缺失节点 {30,36,42} 内插，<24h 借用 24h + σ×√(L/24)
+  - 合计 20 模型/站点，2 站共 40 个；命名 `{Station}_{Season}_{Max|Min}_lead{H}h.pkl`
 - **Input Features**：集合均值 + 集合方差 + 成员极值范围（5 成员 c00+p01-p04；**不用分位数与时间特征**）
 - **特征口径**：日极值 = 完全包含（⊆ 本地日）的 6h TMAX/TMIN 窗口极值（放弃残缺 3h 窗口）
-- **Training Objective**：最小化 CRPS（每个季节 $\times$ 时效桶独立训练）
+- **Training Objective**：最小化高斯 CRPS（每个季节 $\times$ 时效桶独立训练，L-BFGS-B + L2(d) + 热启动）
 - **Seasonal Buckets**：DJF / MAM / JJA / SON
 - **Separate Models**：最高温与最低温独立训练
-- **三级降级**（v5.3）：Level 1 偏态 EMOS → Level 2 标准高斯 → Level 3 气候学；硬触发（数值异常）+ 软触发（CRPS 无改进）
+- **两级降级**：Level 1 高斯 EMOS+Floor → Level 2 气候学；硬触发（超迭代/NaN/Inf）+ 软触发（CRPS 显著劣于气候学）
 - **Training Period**：单次留出（训练 2000-2018 / 验证 2019）+ 训练期滚动验证（Rolling-Origin）；时间墙隔离
 
 ### 4.3 Dynamic Correction
@@ -133,10 +135,11 @@ Real-time Observations ──────┘
 4. **Data Storage**: Parquet files, SQLite database, directory structure
 
 ### 5.2 Week 3-4: Model Implementation
-1. **Skewed Gaussian**: Distribution class with CRPS calculation
-2. **EMOS Training**: CRPS minimization with seasonal $\times$ lead-time matrix (68 models/station)
-3. **Training Pipeline**: 单次留出（2000-2018/2019）+ 训练期滚动验证（Rolling-Origin），时间墙隔离
-4. **Model Versioning**: DVC for reproducibility
+1. **Climatology**: σ_clim(d)/μ_clim(d) 计算（31 天滑动窗，OOS）
+2. **Gaussian EMOS**: Distribution class with closed-form CRPS + variance floor
+3. **EMOS Training**: CRPS minimization with seasonal $\times$ lead-time matrix (20 models/station)
+4. **Training Pipeline**: 单次留出（2000-2018/2019）+ 训练期滚动验证（Rolling-Origin），时间墙隔离
+5. **Model Versioning**: DVC for reproducibility
 
 ### 5.3 Week 5-6: Prediction System
 1. **Static Predictor**: Load models, generate base predictions
@@ -167,9 +170,9 @@ Real-time Observations ──────┘
 - **Window Inclusion Rule**: 仅纳入完全包含（⊆ 本地日）的 6h 窗口；新增城市需通过极值覆盖告警检查
 
 ### 6.2 Model Training
-- **Training Split**: 2000-2012 train, 2013-2017 validation, 2018-2019 test
-- **Feature Engineering**: Ensemble statistics + temporal features
-- **Hyperparameter Tuning**: Grid search with time-series cross-validation
+- **Training Split**: 2000-2018 train, 2019 validation（单次留出）+ Rolling-Origin
+- **Feature Engineering**: 集合均值 + 方差 + 成员极值范围（弃分位数与时间特征）
+- **Optimization**: 高斯 CRPS 闭式解 + L-BFGS-B；L2(d, 1e-3)；热启动 (0,1,0,1)
 - **Model Persistence**: Pickle/joblib with metadata
 
 ### 6.3 System Design
@@ -248,7 +251,7 @@ Real-time Observations ──────┘
 - [ ] Feature extraction produces expected statistics
 
 ### 10.2 Model Training
-- [ ] Skewed Gaussian implementation mathematically correct
+- [ ] Gaussian EMOS implementation mathematically correct (with variance floor)
 - [ ] EMOS training reduces CRPS compared to initial parameters
 - [ ] Separate models for max/min temperatures and seasons
 - [ ] Models can be saved, loaded, and reproduced
@@ -284,10 +287,10 @@ Real-time Observations ──────┘
 4. Create data processing utilities (time alignment, unit conversion)
 
 ### Short-term (Week 2-4)
-1. Implement skewed Gaussian distribution with CRPS
-2. Build EMOS training pipeline
+1. Implement climatology (σ_clim/μ_clim) and Gaussian EMOS distribution with CRPS
+2. Build EMOS training pipeline (two-level degradation)
 3. Create feature extraction from GEFS ensembles
-4. Set up model training and validation framework
+4. Set up model training and validation framework (three-layer acceptance)
 
 ### Medium-term (Week 5-8)
 1. Implement dynamic correction and physical constraints

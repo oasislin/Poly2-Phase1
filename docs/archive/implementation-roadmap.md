@@ -1,5 +1,7 @@
 # Implementation Roadmap
 
+> ⚠️ **已废弃（早期 v2.x 设计文档，保留仅作历史参考）**：本文内容与现行 v5.9 执行规格不一致（偏态高斯 EMOS、分位数/时间特征等已废弃）。现行权威规格见 `specs/phase1-specification-complete.md` 与 `specs/implementation-tasks-phase1.md`。
+
 ## Phase 1: High-Precision Physical Probability Model (Current Focus)
 
 ### Milestone 1.1: Data Pipeline Foundation (Weeks 1-2)

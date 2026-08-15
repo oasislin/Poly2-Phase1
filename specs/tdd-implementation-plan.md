@@ -1,6 +1,6 @@
 # TDD Implementation Plan - Clean Version
 
-> **对齐 v5.7 执行规格（2026-08-14）**：GEFS 测试改用 6h 窗口 TMAX/TMIN + 5 成员口径；特征测试改为 {mean, variance, member_max, member_min}（弃分位数与时间特征）。
+> **对齐 v5.9 执行规格（2026-08-15）**：GEFS 测试沿用 6h 窗口 TMAX/TMIN + 5 成员口径；特征测试 {mean, variance, member_max, member_min}（弃分位数与时间特征）；模型测试改为高斯 EMOS + 方差 Floor + 两级降级。
 
 ## Week 1-2: Data Infrastructure (TDD Focus)
 
@@ -41,7 +41,7 @@ def test_parse_html_extracts_temperature_values():
 
 ### Day 3-4: GEFS Data Fetcher
 
-#### Test 2.1: Regional Data Download（v5.7 对齐）
+#### Test 2.1: Regional Data Download（v5.9 对齐）
 ```python
 def test_download_gefs_returns_xarray_dataset():
     """GEFS fetcher returns xarray Dataset with expected variables（6h 窗口 TMAX/TMIN，5 成员）"""
@@ -135,7 +135,7 @@ def test_quality_control_flags_impossible_temperatures():
 
 ### Day 8-9: Feature Extraction
 
-#### Test 5.1: Ensemble Statistics Calculation（v5.7 对齐）
+#### Test 5.1: Ensemble Statistics Calculation（v5.9 对齐）
 ```python
 def test_ensemble_statistics_calculation():
     """集合统计 = {mean, variance, member_max, member_min}（5 成员，弃分位数）"""

@@ -1,5 +1,7 @@
 # WunderGround Scraper Integration Plan
 
+> ⚠️ **已废弃（早期 v2.x 设计文档，保留仅作历史参考）**：其中 Task 1.1（WunderGround 抓取器）部分为已完成冻结历史；模型层规划（偏态高斯 EMOS、分位数/时间特征等）与现行 v5.9 执行规格不一致。现行权威规格见 `specs/phase1-specification-complete.md` 与 `specs/implementation-tasks-phase1.md`。
+
 ## Overview
 
 This document outlines how to integrate the existing WunderGround data scraping system into the Polymarket Temperature Prediction System. The existing system provides a robust foundation for historical temperature data acquisition that we can leverage for model training.

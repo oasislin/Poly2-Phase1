@@ -1,5 +1,7 @@
 # Specification: Polymarket Temperature Prediction System - Phase 1
 
+> ⚠️ **已废弃（早期 v2.x 设计文档，保留仅作历史参考）**：本文内容与现行 v5.9 执行规格不一致（偏态高斯 EMOS、分位数/时间特征等已废弃）。现行权威规格见 `specs/phase1-specification-complete.md`（完整规格）与 `specs/implementation-tasks-phase1.md`（任务列表）。
+
 ## Problem Statement
 
 Polymarket operates binary options markets for temperature predictions in specific cities and dates. Traders need accurate probability predictions for temperature thresholds to make informed betting decisions. The current challenge is building a high-precision physical probability model that can predict both maximum and minimum temperature probability distributions using free public data sources, with validation against historical Wunderground data before moving to live trading.

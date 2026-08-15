@@ -1,5 +1,7 @@
 # Data Flow Specification
 
+> ⚠️ **已废弃（早期 v2.x 设计文档，保留仅作历史参考）**：本文内容与现行 v5.9 执行规格不一致（偏态高斯 EMOS、分位数/时间特征等已废弃）。现行权威规格见 `specs/phase1-specification-complete.md` 与 `specs/implementation-tasks-phase1.md`。
+
 ## Overview
 
 This document details the flow of data through the Polymarket Temperature Prediction System, including data sources, transformations, and outputs at each stage.

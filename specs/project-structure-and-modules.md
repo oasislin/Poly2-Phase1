@@ -1,6 +1,6 @@
 # Project Structure and Module Design
 
-> **对齐 v5.7 执行规格（2026-08-14）**：模型矩阵升级为"季节 $\times$ 时效"（68 模型/站），特征为 6h 窗口 TMAX/TMIN 日极值 + 5 成员集合统计（均值/方差/成员极值）。
+> **对齐 v5.9 执行规格（2026-08-15）**：模型矩阵为"季节 $\times$ 时效"（20 模型/站，高斯 EMOS + 气候学方差 Floor），特征为 6h 窗口 TMAX/TMIN 日极值 + 5 成员集合统计（均值/方差/成员极值）；缺失时效节点用参数 (a,b,c,d) 线性内插。
 
 ## Directory Structure
 
@@ -45,7 +45,8 @@ polymarket-temperature-prediction/
 │   │   └── quality_control.py
 │   ├── modeling/                  # Model implementation
 │   │   ├── __init__.py
-│   │   ├── skewed_gaussian.py
+│   │   ├── climatology.py
+│   │   ├── gaussian_emos.py
 │   │   ├── emos_trainer.py
 │   │   ├── seasonal_trainer.py
 │   │   └── model_registry.py
@@ -205,13 +206,7 @@ class FeatureExtractor:
         self,
         ensemble_data: xr.DataArray
     ) -> Dict[str, float]:
-        """Calculate ensemble statistics (mean, std, percentiles)"""
-        
-    def extract_temporal_features(
-        self,
-        forecast_time: datetime
-    ) -> Dict[str, float]:
-        """Extract temporal features (day of year, month, etc.)"""
+        """集合统计 = {mean, variance, member_max, member_min}（5 成员，弃分位数与时间特征）"""
         
     def create_feature_vector(
         self,
@@ -224,19 +219,23 @@ class FeatureExtractor:
 
 ### 3. Modeling Modules
 
-#### `skewed_gaussian.py`
+#### `climatology.py`
 ```python
-class SkewedGaussian:
-    """Skewed Gaussian distribution with μ, σ, and skewness"""
+class Climatology:
+    """气候学基线：σ_clim(d)/μ_clim(d)（31 天滑动窗 × 2000-2018 实测，逐日平滑）"""
     
-    def __init__(
-        self, 
-        mu: float, 
-        sigma: float, 
-        skewness: float
-    ):
-        """Initialize distribution parameters"""
-        
+    def compute(self, observations, station, target_type) -> pd.Series:
+        """按日历日输出平滑的 μ_clim(d)、σ_clim(d) 曲线（严格 OOS：不碰 2019）"""
+    
+    def sigma_clim(self, day_of_year: int) -> float:
+        """查表返回目标日的 σ_clim(d)"""
+```
+
+#### `gaussian_emos.py`
+```python
+class GaussianEMOS:
+    """高斯 EMOS 分布 N(μ, σ²)，σ² = c² + d²·S²_ens + σ²_clim(d)（无 skewness）"""
+    
     def pdf(self, x: float) -> float:
         """Probability density function"""
         
@@ -247,27 +246,20 @@ class SkewedGaussian:
         """Quantile function (inverse CDF)"""
         
     def crps(self, observation: float) -> float:
-        """Continuous Ranked Probability Score"""
-        
-    @classmethod
-    def fit_to_data(
-        cls, 
-        observations: np.ndarray
-    ) -> 'SkewedGaussian':
-        """Fit distribution parameters to data"""
+        """高斯 CRPS 闭式解（Gneiting 公式）"""
 ```
 
-#### `emos_trainer.py`（v5.7 对齐）
+#### `emos_trainer.py`（v5.9 对齐）
 ```python
 class EMOSTrainer:
-    """EMOS calibration for skewed Gaussian distributions（季节 × 时效矩阵）"""
+    """EMOS calibration for Gaussian with variance floor（季节 × 时效矩阵，20 模型/站）"""
     
     def __init__(
         self,
         feature_columns: List[str],   # [ens_mean, ens_var, member_max, member_min]
         target_column: str,
         season: str,                  # DJF / MAM / JJA / SON
-        lead_time_bucket: int,        # 6, 12, ..., 54（最高温）；6, 12, ..., 48（最低温）
+        lead_time_bucket: int,        # {54,30,6}（最高温）；{48,24}（最低温）
         target_type: str              # 'max' | 'min'
     ):
         """Initialize trainer for specific season × lead-time bucket and target"""
@@ -277,13 +269,13 @@ class EMOSTrainer:
         features: pd.DataFrame,
         observations: pd.Series
     ) -> Dict[str, Any]:
-        """Train EMOS model to minimize CRPS；三级降级：Level 1 偏态 → Level 2 高斯 → Level 3 气候学"""
+        """Train EMOS（高斯 CRPS 闭式解 + L-BFGS-B + L2(d) + 热启动）；两级降级：Level 1 高斯 EMOS+Floor → Level 2 气候学"""
         
     def predict_parameters(
         self,
         features: pd.DataFrame
     ) -> pd.DataFrame:
-        """Predict distribution parameters (μ, σ, skewness) for new data"""
+        """Predict distribution parameters (μ, σ) for new data"""
         
     def calculate_crps(
         self,
@@ -292,7 +284,7 @@ class EMOSTrainer:
     ) -> float:
         """Calculate CRPS for predictions"""
 ```
-> 模型矩阵规模：4 季节 × (9 + 8) 时效节点 = 68 模型/站点，2 站共 136 个。命名 `{Station}_{Season}_{Max|Min}_lead{H}h.pkl`。
+> 模型矩阵规模：4 季节 × (3 + 2) 时效节点 = 20 模型/站点，2 站共 40 个。命名 `{Station}_{Season}_{Max|Min}_lead{H}h.pkl`。缺失时效节点用参数 (a,b,c,d) 线性内插。
 
 ### 4. Prediction Modules
 
@@ -310,14 +302,14 @@ class DynamicCorrector:
         
     def correct_max_temp_probability(
         self,
-        base_distribution: SkewedGaussian,
+        base_distribution: GaussianEMOS,
         threshold: float
     ) -> float:
         """Calculate P(X ≥ L | X > T_now) for maximum temperature"""
         
     def correct_min_temp_probability(
         self,
-        base_distribution: SkewedGaussian,
+        base_distribution: GaussianEMOS,
         threshold: float
     ) -> float:
         """Calculate P(X ≤ L | X < T_now) for minimum temperature"""
@@ -377,14 +369,14 @@ class MetricsCalculator:
     
     def calculate_crps(
         self,
-        predictions: List[SkewedGaussian],
+        predictions: List[GaussianEMOS],
         observations: List[float]
     ) -> float:
         """Calculate Continuous Ranked Probability Score"""
         
     def calculate_pit(
         self,
-        predictions: List[SkewedGaussian],
+        predictions: List[GaussianEMOS],
         observations: List[float]
     ) -> np.ndarray:
         """Calculate Probability Integral Transform values"""
@@ -445,7 +437,7 @@ regions:
     stations: ["KDEN"]
 ```
 
-### `configs/model_params.yaml`（v5.7 对齐）
+### `configs/model_params.yaml`（v5.9 对齐）
 ```yaml
 training:
   train_start_year: 2000
@@ -461,9 +453,16 @@ seasons:
   JJA: [6, 7, 8]    # Summer
   SON: [9, 10, 11]  # Fall
 
-lead_time_buckets:
-  max: [54, 48, 42, 36, 30, 24, 18, 12, 6]   # 名义目标 15:00 LT
-  min: [48, 42, 36, 30, 24, 18, 12, 6]        # 名义目标 06:00 LT
+lead_time_nodes:              # 真实训练节点（00Z 起报可达）
+  max: [54, 30, 6]            # 名义目标 15:00 LT
+  min: [48, 24]               # 名义目标 06:00 LT
+  interpolate:                # 缺失节点用 (a,b,c,d) 线性内插
+    max: [12, 18, 24, 36, 42, 48]
+    min: [30, 36, 42]
+
+climatology:                  # σ_clim(d)/μ_clim(d) 计算
+  window_days: 31             # 前后各 15 天
+  years: [2000, 2018]         # 严格 OOS，不碰 2019
 
 emos:
   feature_columns:
@@ -475,13 +474,15 @@ emos:
     - "temp_max"
     - "temp_min"
   members: ["c00", "p01", "p02", "p03", "p04"]   # 5 成员集合对齐
-  degradation:                # 三级降级（硬+软触发）
-    level1: "skewed_emos"
-    level2: "gaussian_emos"
-    level3: "climatology"
+  variance_floor: "sigma_clim_squared"           # σ²_clim(d)，不参与优化
+  degradation:                # 两级降级（硬+软触发）
+    level1: "gaussian_emos_with_floor"
+    level2: "climatology"
   hyperparameters:
     max_iterations: 1000
     tolerance: 1e-6
+    l2_lambda_d: 1e-3         # 仅对 d 的 L2 正则
+    init: [0, 1, 0, 1]        # 热启动 (a,b,c,d) + O(1e-3) 扰动
 ```
 
 ## Test Structure
@@ -498,15 +499,15 @@ def test_extract_region_crops_to_specified_bounds():
 def test_download_handles_network_errors():
     """Fetcher handles network errors gracefully with retry logic"""
 
-# tests/unit/modeling/test_skewed_gaussian.py
-def test_skewed_gaussian_pdf_integrates_to_one():
+# tests/unit/modeling/test_gaussian_emos.py
+def test_gaussian_pdf_integrates_to_one():
     """PDF integrates to 1 over valid range"""
     
 def test_crps_calculation_matches_reference():
     """CRPS calculation matches verified reference implementation"""
     
-def test_parameter_estimation_converges():
-    """Parameter estimation converges for synthetic data"""
+def test_variance_floor_never_below_climatology():
+    """σ² 天然 ≥ σ²_clim(d)（Floor 生效）"""
 
 # tests/unit/prediction/test_dynamic_corrector.py
 def test_correction_increases_with_current_temp():
