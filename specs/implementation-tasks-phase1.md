@@ -94,13 +94,14 @@
 **Priority**: Medium
 **Estimate**: 2 days
 **Dependencies**: Task 1.1, 1.2, 1.3
+**进度**：T1.4-01 至 T1.4-04 全部完成（2026-08-16），包含 Schema 验证、Parquet 特征分区库、SQLite 时序数据库及统一 StorageManager，82 项测试全部通过（100% 完成）。
 
 **Description**: Set up data storage infrastructure
-- [ ] Create directory structure: `data/raw/`, `data/processed/`, `data/models/`
-- [ ] Implement Parquet writer/reader for processed features
-- [ ] Set up SQLite database for predictions and metrics
-- [ ] Add data versioning with timestamps
-- [ ] Implement data validation on load
+- [x] Create directory structure: `data/raw/`, `data/processed/`, `data/models/`, `data/db/`
+- [x] Implement Parquet writer/reader for processed features (`parquet_store.py`)
+- [x] Set up SQLite database for predictions and metrics (`database.py`)
+- [x] Add data versioning with timestamps (`updated_at`, `created_at`, `evaluated_at`)
+- [x] Implement data validation on load (`data_validator.py`, `storage_manager.py`)
 
 **Acceptance Criteria**:
 - Data organized by station and date
