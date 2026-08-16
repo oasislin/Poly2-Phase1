@@ -68,17 +68,19 @@
 **Priority**: High  
 **Estimate**: 4 days
 **Dependencies**: Task 1.1, 1.2
+**进度**：T1.3-01 至 T1.3-05 全部完成（2026-08-16），单元测试与集成测试（56 passed）及真实网络冒烟全绿，Task 1.3 验收全部通过（100% 完成）。
 
 **Description**: Implement core data processing utilities（v5.9.1 口径）
-- [ ] Create `time_aligner.py` for UTC to local time conversion（本地日 = 当地时钟 00:00-24:00，含丹佛 DST 平移）
-- [ ] Implement `unit_converter.py` for temperature unit standardization
-- [ ] Create `spatial_interpolator.py` with bilinear interpolation（禁止最近邻；从存储的 0.25° 网格裁剪区域（上海 41×41）提取站点周边 2×2 邻域插值）
-- [ ] Implement `elevation_corrector.py` with standard lapse rate（Γ = 0.0065 K/m，作用于 TMAX/TMIN 日极值特征）
-- [ ] Add `feature_extractor.py`：
+- [x] Create `time_aligner.py` for UTC to local time conversion（本地日 = 当地时钟 00:00-24:00，含丹佛 DST 平移）
+- [x] Implement `unit_converter.py` for temperature unit standardization
+- [x] Create `spatial_interpolator.py` with bilinear interpolation（禁止最近邻；从存储的 0.25° 网格裁剪区域（上海 41×41）提取站点周边 2×2 邻域插值）
+- [x] Implement `elevation_corrector.py` with standard lapse rate（Γ = 0.0065 K/m，作用于 TMAX/TMIN 日极值特征）
+- [x] Add `feature_extractor.py`：
   - 日极值 = **完全包含（⊆ 本地日）**的 6h TMAX/TMIN 窗口极值（非相交窗口）
   - 集合统计量 = 集合均值 + 集合方差 + 成员极值范围（5 成员；不用分位数与时间特征）
   - **新增城市覆盖告警**：天文算法计算全年日出，验证覆盖跨度 ⊇ [日出−1h, 日出+0.5h]，不满足输出警告
-- [ ] Write comprehensive tests for all transformations
+- [x] Create `data_processor.py` for unified end-to-end processing pipeline orchestration
+- [x] Write comprehensive tests for all transformations（unit + integration）
 
 **Acceptance Criteria**:
 - 所有温度内部为 Celsius

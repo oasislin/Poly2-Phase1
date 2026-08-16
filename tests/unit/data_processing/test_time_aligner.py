@@ -1,10 +1,12 @@
-"""Unit tests for time alignment and 6h window selection (Task 1.2 T05 / Task 1.3).
+"""Unit tests for time alignment, window selection, and sunrise coverage (Task 1.3 T1.3-03).
 
-Tests the 'completely contained' (subseteq) window selection rule across:
-- Shanghai (UTC+8, offset mod 6 != 0, 3 windows)
-- Denver Summer (UTC-6, offset mod 6 == 0, 4 windows, 0 discarded)
-- Denver Winter (UTC-7, offset mod 6 != 0, 3 windows)
-- Denver DST transition dates
+Tests:
+1. 'Completely contained' (subseteq) window selection rule across:
+   - Shanghai (UTC+8, offset mod 6 != 0, 3 windows)
+   - Denver Summer (UTC-6, offset mod 6 == 0, 4 windows, 0 discarded)
+   - Denver Winter (UTC-7, offset mod 6 != 0, 3 windows)
+   - Denver DST transition dates
+2. Astronomical sunrise calculation and min-temp window coverage verification.
 """
 
 from datetime import date, datetime, timezone
@@ -15,9 +17,11 @@ from src.data_processing.time_aligner import (
     ForecastWindow,
     TimeAlignmentError,
     TimeAligner,
+    calculate_sunrise_time,
     get_local_day_bounds_utc,
     select_contained_6h_windows,
     select_contained_window_objects,
+    verify_sunrise_coverage,
 )
 
 
@@ -139,6 +143,87 @@ class TestDenverWindowSelection:
         assert (end_utc - start_utc).total_seconds() == 25 * 3600
 
 
+class TestAstronomicalSunriseAndCoverage:
+    """Test astronomical sunrise time calculation and window coverage safety verification."""
+
+    def test_shanghai_summer_sunrise(self):
+        # Shanghai summer solstice sunrise is approx 04:50 LT (04:45-04:55)
+        sr = calculate_sunrise_time(
+            target_date=date(2019, 6, 21),
+            latitude=31.15,
+            longitude=121.80,
+            tz_str="Asia/Shanghai",
+        )
+        assert sr.hour == 4
+        assert 45 <= sr.minute <= 55
+
+    def test_shanghai_winter_sunrise(self):
+        # Shanghai winter solstice sunrise is approx 06:50 LT (06:45-06:55)
+        sr = calculate_sunrise_time(
+            target_date=date(2019, 12, 22),
+            latitude=31.15,
+            longitude=121.80,
+            tz_str="Asia/Shanghai",
+        )
+        assert sr.hour == 6
+        assert 45 <= sr.minute <= 58
+
+    def test_denver_summer_sunrise(self):
+        # Denver summer solstice sunrise is approx 05:30 MDT
+        sr = calculate_sunrise_time(
+            target_date=date(2019, 6, 21),
+            latitude=39.86,
+            longitude=-104.67,
+            tz_str="America/Denver",
+        )
+        assert sr.hour == 5
+        assert 25 <= sr.minute <= 40
+
+    def test_denver_winter_sunrise(self):
+        # Denver winter solstice sunrise is approx 07:20 MST
+        sr = calculate_sunrise_time(
+            target_date=date(2019, 12, 22),
+            latitude=39.86,
+            longitude=-104.67,
+            tz_str="America/Denver",
+        )
+        assert sr.hour == 7
+        assert 15 <= sr.minute <= 25
+
+    def test_shanghai_contained_windows_cover_sunrise_span(self):
+        # Contained windows in Shanghai: 02:00 - 20:00 LT
+        # Sensitive interval [sunrise - 1h, sunrise + 0.5h]:
+        # Summer: [03:50, 05:20] -> inside [02:00, 20:00] -> Covered!
+        # Winter: [05:50, 07:20] -> inside [02:00, 20:00] -> Covered!
+        init_time = datetime(2019, 7, 1, 0, 0, tzinfo=timezone.utc)
+        target_date = date(2019, 7, 2)
+        windows = select_contained_window_objects(init_time, target_date, "ZSPD")
+
+        is_covered, msg = verify_sunrise_coverage(
+            windows=windows,
+            target_date=target_date,
+            station_id="ZSPD",
+        )
+        assert is_covered is True
+        assert "covered" in msg.lower()
+
+    def test_insufficient_windows_trigger_warning(self):
+        # If we only had windows starting at 10:00 LT (missing the morning)
+        init_time = datetime(2019, 7, 1, 0, 0, tzinfo=timezone.utc)
+        target_date = date(2019, 7, 2)
+        all_windows = select_contained_window_objects(init_time, target_date, "ZSPD")
+        # Keep only the last window: [14:00, 20:00] LT
+        partial_windows = [all_windows[-1]]
+
+        is_covered, msg = verify_sunrise_coverage(
+            windows=partial_windows,
+            target_date=target_date,
+            station_id="ZSPD",
+        )
+        assert is_covered is False
+        assert "warning" in msg.lower() or "missing" in msg.lower() or "not covered" in msg.lower()
+
+
 class TestTimeAlignerClass:
     def test_aligner_wrapper(self):
         aligner = TimeAligner(default_station="ZSPD")
@@ -151,6 +236,10 @@ class TestTimeAlignerClass:
         objs = aligner.get_contained_window_objects(init_time, target_date)
         assert len(objs) == 3
         assert isinstance(objs[0], ForecastWindow)
+
+        # Check sunrise coverage check through aligner
+        is_cov, _ = aligner.check_sunrise_coverage(init_time, target_date)
+        assert is_cov is True
 
     def test_invalid_timezone_raises(self):
         with pytest.raises(TimeAlignmentError):
