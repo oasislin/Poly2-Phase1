@@ -1,269 +1,169 @@
 # Polymarket 温度预测系统 - Phase 1
 
-## 项目概述
+本项目旨在构建一个高精度的物理概率模型，用于预测 Polymarket 温度市场的日最高和最低气温概率分布。系统以高斯 EMOS（Ensemble Model Output Statistics）模型为核心，采用“离线气象数据特征提取 $\to$ 统计后处理校准 $\to$ 概率分布建模与回测”的量化架构。
 
-构建一个高精度的物理概率模型，用于预测Polymarket温度市场的最高和最低温度概率分布。系统使用免费的公共数据源（Wunderground历史数据、GEFS预报数据、实时观测数据），并在进入实时交易前使用历史Wunderground数据进行验证。
+当前项目执行规范严格遵循 **《项目执行文件 v5.9.1(细化版)》**，业务需求来源为 **《项目方案：Polymarket 温度市场量化投注系统 (v2.3)》**。
 
-## 核心目标
+---
 
-- **数据源**: Wunderground（地面真实数据）、GEFS（预报数据）、实时观测
-- **目标城市**: 上海（ZSPD）和丹佛（KDEN）
-- **时间范围**: 历史验证（2000-2019）
-- **模型类型**: 高斯EMOS模型（含气候学方差Floor），按季节×时效分桶
-- **输出**: 温度阈值的概率分布
-- **排除**: 市场微观结构、流动性分析、交易执行
+## 核心系统架构
 
-## 系统架构
-
-### 三层预测系统
+### 1. 业务与物理预测层级
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                    物理约束层                              │
-│  基于历史数据的最大变温率约束                             │
+│                    物理约束层 (Phase 1C)                    │
+│  基于站点历史极端变温率的物理边界硬拦截                      │
 └─────────────────────────────────────────────────────────────┘
-                              │
+                               ▲
 ┌─────────────────────────────────────────────────────────────┐
-│                    动态修正层                              │
-│  基于当前温度的动态概率截断                                │
-│  P(X ≥ L | X > T_now) for max, P(X ≤ L | X < T_now) for min │
+│                    动态修正层 (Phase 1C)                    │
+│  实时观测温度动态概率截断: P(X ≥ L | X > T_now)             │
 └─────────────────────────────────────────────────────────────┘
-                              │
+                               ▲
 ┌─────────────────────────────────────────────────────────────┐
-│                    静态基础模型层                          │
-│  基于GEFS集合预报训练的高斯EMOS模型（含方差Floor）         │
-│  最高/最低温度和DJF/MAM/JJA/SON季节的独立模型              │
+│                 静态高斯 EMOS 基础模型 (Phase 1B)           │
+│  μ = a + b * ensemble_mean                                  │
+│  σ² = max(c + d * ensemble_variance, σ_clim_floor²)         │
+│  (分城市 2 站 × 分季节 4 季 × 分时效 5 桶 = 40 组独立模型)  │
+└─────────────────────────────────────────────────────────────┘
+                               ▲
+┌─────────────────────────────────────────────────────────────┐
+│                 数据工程与特征存储基石 (Phase 1A)           │
+│  Wunderground 实测 + GEFS 0.25° 网格 4 点双线性空间插值     │
+│  本地日完全包含 6h 窗口切片 + 高程递减率修正 (Γ=0.0065 K/m) │
+│  Parquet 特征库 ({station}/{year}.parquet) + SQLite 时序库  │
 └─────────────────────────────────────────────────────────────┘
 ```
 
-### 数据流
-```
-Wunderground（历史） ───┐
-                       ├─→ 时间对齐 → 单位转换 → 特征工程
-GEFS（预报） ───────────┘
-                       │
-实时观测 ──────────────┘
-                       │
-               模型训练（EMOS）
-                       │
-               静态预测（μ, σ, 偏度）
-                       │
-               动态修正（每小时更新）
-                       │
-               物理约束（变温率限制）
-                       │
-               分箱概率转换（Polymarket）
-                       │
-               验证与监控（CRPS, PIT, Talagrand）
-```
+---
 
-## Phase 1 完成状态
+## 项目当前进展与完成状态
 
-### ✅ Task 1.1: Wunderground数据管道（已完成）
-- **完整的12个气象字段提取**：温度、露点、湿度、风速风向、气压、降水量、天气状况
-- **健壮的错误处理**：403 Forbidden错误处理（30秒重试，10次连续失败停止）
-- **数据存储**：SQLite数据库持久化存储，CSV导出，断点续传
-- **批量处理**：批量下载控制器，状态持久化，优雅中断处理
+| 阶段 / 模块 | 包含任务 | 完成度 | 状态与核心交付物 |
+|---|---|:---:|---|
+| **Phase 1A: 核心数据基础设施** | **Task 1.1 ~ Task 1.4** | **100%** | • **Task 1.1**: Wunderground 历史实测抓取与 SQLite 存储（2015-2024 年）<br>• **Task 1.2**: NOAA GEFS Reforecast/Realtime 下载器（0.25° 网格裁剪、5 成员、MD5 断点续传、CSV 状态机）<br>• **Task 1.3**: 核心数据加工（时效完全包含对齐、4 点双线性插值、摄氏度标准化、高程订正、5 成员极值折叠、NOAA 天文日出安全校验）<br>• **Task 1.4**: 数据存储与管理（Parquet 特征分区库、SQLite 时序库、Schema/物理校验器 `DataValidator`、一键对齐训练集门面 `StorageManager`） |
+| **Phase 1B: EMOS 概率模型** | **Task 2.1 ~ Task 2.3** | 0% | • **Task 2.1**: 高斯 EMOS 分布类（含气候学方差 Floor）<br>• **Task 2.2**: CRPS 损失函数最小化优化器（BFGS/Nelder-Mead）<br>• **Task 2.3**: 滚动窗口时序回测引擎（40 个模型矩阵、CRPS/PIT 评估） |
+| **Phase 1C: 修正层与系统验证** | **Task 3.1 ~ Task 3.3** | 0% | • **Task 3.1**: 实时观测动态概率截断修正<br>• **Task 3.2**: 历史变温率物理约束<br>• **Task 3.3**: 完整系统回测与压力测试 |
 
-### 🔄 Task 1.2: GEFS数据管道（进行中）
-- **数据源**: AWS Open Data via Herbie库
-- **类型**: 回算预报（历史）和实时预报
-- **变量**: tmax_2m / tmin_2m（6h 窗口 TMAX/TMIN）
-- **分辨率**: 0.25°（前10天）→ 0.5°（之后），6小时间隔
-- **✅ T01 完成（2026-08-14）**: `download_reforecast` 最小下载路径（reforecast tmax_2m，含区域裁剪，mock 网络单元测试 9 项全绿）
+---
 
-### 📋 Task 1.3: 数据处理基础（待开始）
-- **时间对齐**: UTC到本地时间转换
-- **单位转换**: 温度单位标准化（摄氏度）
-- **空间插值**: 双线性插值
-- **高程校正**: 标准递减率
-- **特征提取**: 集合统计量
+## 核心技术特性 (Phase 1A)
 
-### 🗄️ Task 1.4: 数据存储系统（待开始）
-- **目录结构**: `data/raw/`, `data/processed/`, `data/models/`
-- **文件格式**: Parquet格式存储处理后的特征
-- **数据库**: SQLite存储预测和指标
-- **数据版本化**: 时间戳版本控制
+1. **时效对齐与 6h 窗口完全包含（$\subseteq$ 规则）**：
+   - 严格按站点本地时钟 `00:00 - 24:00 LT`（支持丹佛 DST 夏冬令时平移）；
+   - 仅纳入完全包含在目标自然日内的 6h 预报窗口（上海 3 窗口、丹佛夏 4 窗口、丹佛冬 3 窗口），杜绝未来信息穿越；
+   - 内置 NOAA 天文算法，自动验证 6h 窗口对最低气温敏感时段 $[\text{日出}-1.0\text{h}, \text{日出}+0.5\text{h}]$ 的安全覆盖。
 
-## 当前进展
+2. **空间插值与物理修正**：
+   - **4 点双线性插值**（严格禁用最近邻）：精确匹配 GEFS 0.25° 网格 2×2 邻域，自动处理纬度降序及经度 $[0, 360]$ / $[-180, 180]$ 映射；
+   - **国际标准大气递减率高程修正**：$\Gamma = 0.0065\text{ K/m}$（$6.5^\circ\text{C/km}$），按站点实际海拔与模式网格地形差对 TMAX/TMIN 进行物理订正。
 
-### 已完成
-1. **Wunderground数据采集系统**（Task 1.1）
-   - 完整的12字段提取
-   - 增强的403错误处理
-   - SQLite数据库存储
-   - 批量下载控制器
-   - 57个单元测试通过
+3. **特征协议与模型规格**：
+   - 严格输出 4 项 5 成员集合统计量：`{ensemble_mean, ensemble_variance, member_max, member_min}`；
+   - 遵循 v5.9.1 规范，彻底剔除易引发过拟合的分位数（p10/p90）与人工时间特征（$\sin/\cos$）。
 
-2. **数据完整性验证**
-   - 上海站（ZSPD）：7,540条记录（2000-2020）
-   - 丹佛站（KDEN）：7,272条记录（1999-2019）
-   - 缺失数据确认：网站本身数据不完整
+4. **存储与数据完整性保障**：
+   - **特征存储**：按 `data/processed/features/{station_id}/{year}.parquet` 分层分区存储，支持原子写入（Atomic write）与主键去重 Upsert；
+   - **完整性校验**：`DataValidator` 强制拦截缺失字段、NaN/Inf 以及非物理极限气温（$-60^\circ\text{C} \sim +60^\circ\text{C}$）。
 
-### 技术特性
+---
 
-#### 增强的403处理
-```python
-scraper = WundergroundScraper(
-    max_consecutive_403=10,      # 最大连续403错误次数
-    forbidden_retry_delay=30,    # 403后重试延迟（秒）
-    max_retries=5               # 最大重试次数
-)
-```
-
-#### 智能缓存策略
-- ✅ 成功响应（status_code=200）：缓存7天
-- ⚠️ 404错误：缓存1天
-- ❌ 其他错误：缓存1小时
-- 🔄 避免缓存污染：不缓存错误响应
-
-## 文件结构
+## 目录结构
 
 ```
 Poly2-Phase1/
-├── src/                          # 源代码
-│   └── data_acquisition/        # 数据采集模块
-│       ├── wunderground_scraper.py      # Wunderground爬虫（含403增强）
-│       └── mock_wunderground.py         # 模拟数据生成器
-├── scripts/                      # 工具脚本
-│   ├── download_wunderground_batch_enhanced.py  # 批量下载控制器
-│   ├── download_wunderground_batch.py           # 基础批量下载
-│   └── download_wunderground_data.py            # 单次下载
-├── specs/                        # 项目规范
-│   ├── phase1-specification-complete.md         # Phase 1完整规范
-│   ├── polymarket-temperature-prediction-phase1.md  # 温度预测系统规范
-│   ├── project-structure-and-modules.md         # 项目结构和模块
-│   ├── implementation-tasks-phase1.md           # 实施任务
-│   ├── testing-strategy-phase1.md               # 测试策略
-│   └── tdd-implementation-plan.md               # TDD实施计划
-├── docs/                         # 文档
-│   ├── system-architecture.md    # 系统架构
-│   ├── data-flow.md              # 数据流图
-│   ├── implementation-roadmap.md # 实施路线图
-│   └── wunderground-integration-tasks.md  # Wunderground集成任务
-├── tests/                        # 测试
-│   └── unit/data_acquisition/    # 数据采集单元测试
+├── src/
+│   ├── data_acquisition/        # 数据采集层
+│   │   ├── wunderground_scraper.py      # Wunderground 历史实测爬虫
+│   │   ├── gefs_fetcher.py              # NOAA GEFS GRIB2 下载器与区域裁剪
+│   │   └── gefs_batch_downloader.py     # CSV 状态机驱动的批量下载调度器
+│   └── data_processing/         # 数据工程与存储层
+│       ├── constants.py                 # 站点元数据与中央常量
+│       ├── unit_converter.py            # 温度单位向量化转换 (K/C/F)
+│       ├── elevation_corrector.py       # 高程递减率物理订正
+│       ├── spatial_interpolator.py      # 4 点双线性空间插值
+│       ├── time_aligner.py              # 本地日时效对齐与 NOAA 天文日出校验
+│       ├── feature_extractor.py         # 6h 极值折叠与 5 成员统计量提取
+│       ├── data_processor.py            # 端到端数据处理统一编排
+│       ├── data_validator.py            # Schema 与物理合理性校验器
+│       ├── parquet_store.py             # Parquet 分区特征库
+│       ├── database.py                  # SQLite 时序与指标数据库引擎
+│       └── storage_manager.py           # 统一存储管理门面 (对齐训练集 X, y)
+├── scripts/                      # 工具与批处理脚本
+│   ├── download_gefs_batch.py           # GEFS 2000-2019 批量下载与状态机
+│   ├── download_wunderground_batch.py   # Wunderground 批量抓取
+│   └── verify_offline_gefs.py           # 离线真实 GRIB2 子集快速验证
+├── tests/                        # 测试套件 (82 项测试全绿)
+│   ├── unit/                            # 单元测试 (采集、处理、校验、存储)
+│   └── integration/                     # 端到端集成测试 (真实 GRIB2 管道实证)
 ├── data/                         # 数据目录
-│   ├── raw/wunderground/         # 原始Wunderground数据
-│   └── wunderground.db           # SQLite数据库
-├── 403_ENHANCEMENTS_SUMMARY.md   # 403增强功能总结
-├── README.md                     # 项目说明（本文件）
-├── CONTEXT.md                    # 项目上下文
-├── DEVELOPER_GUIDELINES.md       # 开发指南
-├── README_TASK_1_1.md            # Task 1.1详细说明
-├── TEST_SUMMARY.md               # 测试总结
-└── requirements.txt              # Python依赖
+│   ├── raw/                             # 原始 GRIB2 / 下载缓存
+│   ├── processed/                       # 处理后数据 (features/ 与 gefs/)
+│   ├── models/                          # 模型权重与元数据
+│   └── db/                              # SQLite 数据库 (predictions.db, wunderground.db)
+├── specs/                        # 实施规格与任务跟踪
+│   └── implementation-tasks-phase1.md   # Phase 1 细化任务跟踪表
+├── 项目执行文件 v5.9.1(细化版).md   # 核心系统执行权威规范
+└── 项目方案：Polymarket 温度市场量化投注系统 (v2.3).md # 总体需求方案
 ```
+
+---
 
 ## 快速开始
 
-### 安装依赖
+### 1. 安装环境与依赖
 ```bash
 pip install -r requirements.txt
 ```
 
-### Wunderground数据采集
+### 2. 运行完整测试套件
 ```bash
-# 下载所有站点数据（2000-2019）
-python scripts/download_wunderground_batch_enhanced.py --station all --start-year 2000 --end-year 2019 --verbose
+# 运行全部 82 项单元测试与集成测试
+pytest tests/ -v
 
-# 下载单个站点
-python scripts/download_wunderground_batch_enhanced.py --station ZSPD --start-year 2000 --end-year 2020
+# 运行真实 NOAA GEFS 网络冒烟测试 (需要外网)
+RUN_NETWORK_TESTS=1 pytest tests/unit/data_acquisition/test_gefs_fetcher.py::test_network_reforecast_single_message -q
 ```
 
-### Python API
+### 3. Python API 快速调用示例
 ```python
-from src.data_acquisition.wunderground_scraper import WundergroundScraper
+from datetime import date, datetime, timezone
+import xarray as xr
+from src.data_processing import DataProcessor, StorageManager
 
-# 初始化爬虫
-scraper = WundergroundScraper(
-    max_consecutive_403=10,
-    forbidden_retry_delay=30,
-    max_retries=5
+# 1. 初始化服务
+processor = DataProcessor()
+storage = StorageManager()
+
+# 2. 假设已有裁剪后的 GEFS Dataset (ds)
+# 将预报网格数据一键转化为校准特征 DataFrame
+features_df = processor.process_forecast_to_features(
+    dataset=ds,
+    station_id="ZSPD",
+    target_date=date(2019, 7, 2),
+    init_time_utc=datetime(2019, 7, 1, 0, 0, tzinfo=timezone.utc),
+    target_type="max",
+    lead_time_bucket=30,
 )
 
-# 下载单个月份数据
-data = scraper.download_station_data("ZSPD", 2020, 1)
+# 3. 持久化到 Parquet 特征库
+storage.save_forecast_features(features_df)
 
-# 保存到数据库
-scraper.save_to_database(data, "ZSPD")
+# 4. Phase 1B 训练时一键加载特征与实测对齐的完整训练集
+train_df = storage.load_training_dataset(
+    station_id="ZSPD",
+    target_type="max",
+    lead_time_bucket=30,
+    start_date="2019-01-01",
+    end_date="2019-12-31",
+)
+print(train_df[["target_date", "ensemble_mean", "ensemble_variance", "observed_temp"]])
 ```
 
-## 成功标准
+---
 
-### Phase 1 验证指标
-1. **校准性**: PIT直方图均匀分布
-2. **准确性**: CRPS显著优于基准模型（GEFS均值、气候学）
-3. **可靠性**: 系统为>95%的请求时间生成预测
-4. **性能**: 每小时更新在5分钟内完成
-5. **可用性**: 清晰的文档和验证报告
+## 质量与测试保证
 
-### 模型性能要求
-- **CRPS改进**: 比GEFS集合均值提高至少20%
-- **校准误差**: PIT直方图的χ²检验p值>0.05
-- **覆盖概率**: 95%预测区间实际覆盖率为93-97%
-- **季节性表现**: 所有季节（DJF、MAM、JJA、SON）表现一致
-
-## 项目进度
-
-### Phase 1 任务完成情况
-**Phase 1总共10个任务**，分为三个阶段：
-
-#### Phase 1A: 核心基础设施（第1-2周）
-1. ✅ **Task 1.1**: Wunderground数据管道 - **100%完成**
-2. 🔄 **Task 1.2**: GEFS数据管道 - **T01 完成**（GEFS reforecast 下载最小路径，1/7 ticket）
-3. 📋 **Task 1.3**: 数据处理基础 - **0%**
-4. 🗄️ **Task 1.4**: 数据存储系统 - **0%**
-
-#### Phase 1B: 模型实现（第3-4周）
-5. 📊 **Task 2.1**: 高斯EMOS分布（含方差Floor） - **0%**
-6. 📊 **Task 2.2**: EMOS校准 - **0%**
-7. 📊 **Task 2.3**: 动态修正层 - **0%**
-8. 📊 **Task 2.4**: 物理约束层 - **0%**
-
-#### Phase 1C: 验证与监控（第5-6周）
-9. 📊 **Task 3.1**: 验证框架 - **0%**
-10. 📊 **Task 3.2**: 监控系统 - **0%**
-
-### 进度统计
-- **Phase 1A进度**: 25% (1/4个任务)
-- **Phase 1总体进度**: 10% (1/10个任务)
-- **Task 1.1进度**: 100% (已完成)
-
-### 下一步任务
-按照规范中的顺序继续实施：
-1. **Task 1.2**: 实现GEFS数据管道
-2. **Task 1.3**: 实现核心数据处理工具
-3. **Task 1.4**: 建立数据存储系统
-4. **Task 2.1**: 实现高斯EMOS分布（含方差Floor）
-5. **Task 2.2**: 实现EMOS校准
-6. **Task 2.3**: 实现动态修正层
-7. **Task 2.4**: 实现物理约束层
-8. **Task 3.1**: 建立验证框架
-9. **Task 3.2**: 建立监控系统
-
-### Phase 2 规划（后续阶段）
-- 实时数据集成
-- 交易信号生成
-- 风险管理
-- 回测框架
-
-## 技术栈
-
-- **数据采集**: Requests, BeautifulSoup4, SQLite
-- **数据处理**: Pandas, NumPy, xarray
-- **机器学习**: Scikit-learn, SciPy
-- **可视化**: Matplotlib, Seaborn
-- **测试**: Pytest, unittest
-- **工作流**: DVC（数据版本控制）
-
-## 许可证
-
-MIT License
-
-## 作者
-
-Poly Way2 项目团队
-
-## 详细规范
-
-查看 [specs/](specs/) 目录获取完整项目规范文档。
+- **单元测试覆盖**：覆盖所有数学转换（开尔文/摄氏度/华氏度、递减率、双线性插值矩阵、时区 DST、日出计算、集合方差 $ddof=1$）。
+- **真实数据实证**：通过本地缓存的真实 NOAA GRIB2 子集文件，验证了上海夏季（2019-07-01 00Z）与丹佛冬季（2019-01-01 00Z）在实际气象条件下的端到端处理与物理合理性。
+- **契约测试与离线重放**：契约测试直接钉住 GRIB idx 正则与 0.25° 网格方向，防止外部依赖变更导致静默失败。
