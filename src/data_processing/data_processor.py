@@ -83,11 +83,20 @@ class DataProcessor:
             verify_sunrise_coverage(win_objs, target_date, station_id=station_id)
 
         step_dim = self._get_step_dim_name(dataset)
-        avail_steps = [s for s in contained_fxx if s in dataset[step_dim].values]
-        if not avail_steps:
-            raise ValueError(f"Dataset missing required steps {contained_fxx}. Found: {list(dataset[step_dim].values)}")
+        raw_steps = dataset[step_dim].values
 
-        sliced_ds = dataset.sel({step_dim: avail_steps})
+        if np.issubdtype(raw_steps.dtype, np.timedelta64):
+            raw_hours = (raw_steps / np.timedelta64(1, "h")).astype(int)
+            avail_indices = [i for i, h in enumerate(raw_hours) if h in contained_fxx]
+            if not avail_indices:
+                raise ValueError(f"Dataset missing required steps {contained_fxx}. Found hours: {list(raw_hours)}")
+            sliced_ds = dataset.isel({step_dim: avail_indices})
+        else:
+            avail_steps = [s for s in contained_fxx if s in raw_steps]
+            if not avail_steps:
+                raise ValueError(f"Dataset missing required steps {contained_fxx}. Found: {list(raw_steps)}")
+            sliced_ds = dataset.sel({step_dim: avail_steps})
+
         return sliced_ds.rename({step_dim: "window"}) if step_dim != "window" else sliced_ds
 
     def _interpolate_and_standardize_units(

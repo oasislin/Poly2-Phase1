@@ -111,65 +111,40 @@
 
 ## Phase 1B: Model Implementation (Weeks 3-4)
 
+> **对齐 v5.9.1 执行规格与 Spec #10（2026-08-19）**：Phase 1B 已细化拆解为 12 张垂直切片 Tickets（#11 ~ #22）。
+
 ### Task 2.1: Gaussian EMOS Distribution（带气候学方差 Floor）
 **Priority**: High
 **Estimate**: 3 days
-**Dependencies**: Task 1.1
+**Dependencies**: Task 1.1, Task 1.4
+**Spec**: #10
 
-**Description**: Implement Gaussian EMOS distribution with climatological variance floor（v5.9 口径；废弃偏态）
-- [ ] Create `climatology.py` computing σ_clim(d)/μ_clim(d)（31 天滑动窗 × 2000-2018 实测，逐日平滑，严格 OOS）
-- [ ] Implement Gaussian PDF, CDF, and quantile functions（无 skewness）
-- [ ] Implement closed-form CRPS for Gaussian（Gneiting 公式）
-- [ ] 连接函数：μ = a + b·T̄_ens；σ² = c² + d²·S²_ens + σ²_clim(d)（平方参数化）
-- [ ] Write mathematical property tests
-
-**Acceptance Criteria**:
-- σ_clim(d) 计算仅用 2000-2018，不碰 2019 验证集
-- Gaussian CRPS 匹配参考实现
-- 连接函数 σ² 天然 ≥ σ²_clim(d)（Floor 生效）
-- Tests verify mathematical properties
+- [x] **#11 (Ticket 2.1-01)**: `ClimatologyCalculator` 逐日气候学均值与方差底计算 (严格 OOS 2000-2018 实测, 31 天滑动窗, 1-366 日历日映射)
+- [x] **#12 (Ticket 2.1-02)**: `GaussianEMOS` 分布类与数学基础方法 (平方参数化连接函数 $\mu = a + b\bar{T}_{ens}, \sigma^2 = c^2 + d^2 S^2 + \sigma_{clim}^2(d)$, `pdf`, `cdf`, `quantile`, `confidence_interval`)
+- [x] **#13 (Ticket 2.1-03)**: Gneiting 闭式高斯 CRPS 向量化解析解与损失函数 ($\text{CRPS}(y, \mu, \sigma)$ 闭式解, 向量化 Batch 损失函数)
 
 ### Task 2.2: EMOS Model Training
 **Priority**: High
 **Estimate**: 4 days
-**Dependencies**: Task 2.1, 1.3
+**Dependencies**: Task 2.1, 1.3, 1.4
+**Spec**: #10
 
-**Description**: Implement EMOS calibration for Gaussian with variance floor（v5.9 口径）
-- [ ] Create `emos_trainer.py` with closed-form CRPS minimization（L-BFGS-B）
-- [ ] **模型矩阵**：季节 × 时效节点 → 20 模型/站点（最高温 3 节点 {54,30,6} + 最低温 2 节点 {48,24}），2 站共 40 个
-- [ ] 命名规范 `{StationID}_{Season}_{Max|Min}_lead{Hours}h.pkl`
-- [ ] **Lead Time 归桶**：名义目标时间（最高温 15:00 LT / 最低温 06:00 LT）− init，round_to_nearest_6h
-- [ ] **两级降级**：Level 1 高斯 EMOS+Floor → Level 2 气候学；硬触发（超迭代/NaN/Inf）+ 软触发（验证集 CRPS 显著劣于气候学）；|c|/|d|>10 仅告警
-- [ ] 优化：仅对 d 加 L2(λ=1e-3)；热启动 (a,b,c,d)=(0,1,0,1) + O(1e-3) 扰动
-- [ ] 训练/预测成员对齐（c00+p01-p04 5 成员）
-- [ ] Implement model persistence with pickle/joblib
+- [x] **#14 (Ticket 2.2-01)**: `EMOSOptimizer` 单模型参数拟合器与体检评分卡 (L-BFGS-B 优化, $d$ 参数 L2 正则 $\lambda=10^{-3}$, 扰动热启动, 多起点重启, `ModelTrainingDiagnostics`)
+- [x] **#15 (Ticket 2.2-02)**: 两级降级容灾与过拟合软告警机制 (Level 1 高斯 EMOS+Floor $\to$ Level 2 气候学; 未收敛/NaN/Inf 硬触发 + 显著劣于气候学软触发 + $|c|,|d|>10$ 软告警)
+- [x] **#16 (Ticket 2.2-03)**: 时效归桶与季节分集器 (`DatasetPartitioner`: 名义目标 15:00/06:00 LT $- \text{init}$, `round_to_nearest_6h` 归入 {54,30,6}h/{48,24}h, 4 季节切分)
+- [x] **#17 (Ticket 2.2-04)**: 40 组矩阵批量训练编排与矩阵评分看板 (`MatrixTrainer`: 2 站 × 4 季 × 5 节点批量训练, `Matrix Scorecard` 聚合健康看板)
+- [x] **#18 (Ticket 2.2-05)**: 缺失时效节点参数插值与短时效外推器 (`LeadTimeInterpolator`: 线性内插 $\{12,18,24,36,42,48\}\text{h}$, 最低温 $<24\text{h}$ 的 $\sqrt{L/24}$ 方差物理衰减)
+- [x] **#19 (Ticket 2.2-06)**: 模型持久化与统一注册中心 (`ModelRegistry`: `{StationID}_{Season}_{Max|Min}_lead{Hours}h.pkl` 规范, 统一查询门面 `get_model`)
 
-**Acceptance Criteria**:
-- 20 模型/站点矩阵正确生成，命名规范正确
-- CRPS 随 Lead Time 衰减用**配对统计检验**验收（不显著倒挂视为持平通过）
-- 两级降级正确触发（输入病态数据返回气候学且不崩溃）
-- 各真实时效节点独立通过 PIT K-S 检验（p>0.05）
-- 极端事件压力测试通过（见 Task 4.1）
-- Models can be saved and loaded
-
-### Task 2.3: Training Pipeline
+### Task 2.3: Training & Validation Pipeline
 **Priority**: Medium
 **Estimate**: 3 days
 **Dependencies**: Task 2.2, 1.4
+**Spec**: #10
 
-**Description**: Build complete training pipeline（v5.9 口径）
-- [ ] Create `training_pipeline.py` orchestrating data→features→training
-- [ ] 验证集双轨：单次留出（训练 2000-2018 / 验证 2019）+ 训练期滚动验证（Rolling-Origin，逐年滚动原点）
-- [ ] 时间墙隔离：训练阶段严禁访问任何验证集数据
-- [ ] Add model versioning with DVC
-- [ ] Create training reports with metrics（CRPS 衰减曲线、PIT、极端压力测试报告）
-- [ ] Add automated retraining scheduling
-
-**Acceptance Criteria**:
-- Pipeline runs end-to-end without errors
-- Models versioned and reproducible
-- Training reports include all validation metrics
-- Quarterly retraining works correctly
+- [x] **#20 (Ticket 2.3-01)**: `ValidationEngine` 样本外验证引擎与时间墙隔离 (严格时间墙隔离 2000-2018 训练 / 2019 样本外验证, Rolling-Origin 时序交叉验证, 样本外 CRPS/MAE/Spread/PIT 计算)
+- [x] **#21 (Ticket 2.3-02)**: 三重验收门禁与评估报告生成器 (`ReportGenerator`: 真实节点 PIT $p>0.05$, 30h 留出插值 $\text{CRPS}_{virt} \le 1.05\text{CRPS}_{real}$, 极端天气 90% CI 覆盖率 $\ge 80\%$, Pass/Fail 裁决与时效分级报告)
+- [x] **#22 (Ticket 2.3-03)**: `TrainingPipeline` 端到端训练编排与 CLI 命令 (`scripts/train_emos_matrix.py` 一键全流程, 集成测试与端到端测试)
 
 ## Phase 1C: Prediction System (Weeks 5-6)
 

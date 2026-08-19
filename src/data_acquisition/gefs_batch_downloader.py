@@ -89,13 +89,27 @@ class GEFSBatchDownloader:
         # Fill missing years in the requested range
         for yr in range(start_year, end_year + 1):
             if yr not in states:
-                states[yr] = YearState(
-                    year=yr,
-                    download="pending",
-                    crop="pending",
-                    user_check="",
-                    note="",
+                # Auto-detect if processed NetCDF files already exist for all stations
+                all_processed = all(
+                    bool(list((self.processed_dir / str(yr) / s).glob("*.nc")))
+                    for s in self.stations
                 )
+                if all_processed:
+                    states[yr] = YearState(
+                        year=yr,
+                        download="done",
+                        crop="done",
+                        user_check="moved",
+                        note="Existing processed data detected",
+                    )
+                else:
+                    states[yr] = YearState(
+                        year=yr,
+                        download="pending",
+                        crop="pending",
+                        user_check="",
+                        note="",
+                    )
 
         self.save_state(states)
         return states
@@ -219,17 +233,29 @@ class GEFSBatchDownloader:
         init_start = date(year - 1, 12, 31)
         init_end = date(year, 12, 30)
         staging_dir = self.raw_cache_dir / "cropped" / str(year)
+        total_days = (init_end - init_start).days + 1
 
         for station in self.stations:
             bounds = DEFAULT_REGIONS.get(station.lower(), DEFAULT_REGIONS["shanghai"])
             out_dir = staging_dir / station
             out_dir.mkdir(parents=True, exist_ok=True)
 
+            logger.info(f"==> 开始下载 {station.upper()} {year} 年数据 (共 {total_days} 个时次)...")
+
             init_day = init_start
+            completed_in_year = 0
+            month_count = 0
+            month_elapsed = 0.0
+            current_month = init_start.month
+            year_start_time = time.perf_counter()
+
             while init_day <= init_end:
                 target_date = init_day + timedelta(days=1)
                 out_path = out_dir / f"{init_day:%Y%m%d}.nc"
                 md5_path = out_dir / f"{init_day:%Y%m%d}.nc.md5"
+
+                t_day_start = time.perf_counter()
+                skipped = False
 
                 # Resume: a shard already on disk that passes its recorded MD5
                 # is skipped (no re-download / re-decode / re-write).
@@ -237,34 +263,91 @@ class GEFSBatchDownloader:
                     if GEFSFetcher.verify_file_md5(
                         out_path, md5_path.read_text().strip()
                     ):
+                        skipped = True
+                    else:
+                        # corrupted / half-written -> delete and re-download
+                        out_path.unlink(missing_ok=True)
+                        md5_path.unlink(missing_ok=True)
+
+                if not skipped:
+                    windows = self.fetcher.select_contained_windows(
+                        datetime(init_day.year, init_day.month, init_day.day, 0, 0),
+                        target_date,
+                        station,
+                    )
+                    if not windows:
+                        logger.warning(
+                            f"{station} {target_date}: no contained 6h windows, skipping init {init_day}"
+                        )
                         init_day += timedelta(days=1)
                         continue
-                    # corrupted / half-written -> delete and re-download
-                    out_path.unlink()
-                    md5_path.unlink()
 
-                windows = self.fetcher.select_contained_windows(
-                    datetime(init_day.year, init_day.month, init_day.day, 0, 0),
-                    target_date,
-                    station,
-                )
-                if not windows:
-                    logger.warning(
-                        f"{station} {target_date}: no contained 6h windows, skipping init {init_day}"
+                    ds = self.fetcher.download_reforecast(
+                        region_bounds=bounds,
+                        date_range=(init_day, init_day),
+                        members=list(VALID_MEMBERS),
+                        cycles=[0],
+                        forecast_hours=windows,
                     )
-                    init_day += timedelta(days=1)
-                    continue
+                    ds.to_netcdf(out_path, engine="scipy")
+                    md5_path.write_text(GEFSFetcher.calculate_md5(out_path))
 
-                ds = self.fetcher.download_reforecast(
-                    region_bounds=bounds,
-                    date_range=(init_day, init_day),
-                    members=list(VALID_MEMBERS),
-                    cycles=[0],
-                    forecast_hours=windows,
-                )
-                ds.to_netcdf(out_path, engine="scipy")
-                md5_path.write_text(GEFSFetcher.calculate_md5(out_path))
+                t_day_elapsed = time.perf_counter() - t_day_start
+                completed_in_year += 1
+                month_count += 1
+                month_elapsed += t_day_elapsed
+
+                # 延迟预警与主动链路健康检查 (阈值 > 15s)
+                if not skipped and t_day_elapsed > 15.0:
+                    health_fn = getattr(self.fetcher, "check_link_health", GEFSFetcher.check_link_health)
+                    health = health_fn()
+                    diag_box = (
+                        f"\n{'-'*75}\n"
+                        f"⚠️  [延迟预警] {station.upper()} {target_date} 下载耗时达 {t_day_elapsed:.1f}s\n"
+                        f"🔍 [链路诊断] NOAA AWS S3: {health['message']}\n"
+                        f"{'-'*75}\n"
+                    )
+                    print(diag_box)
+
+                # 判断是否为该月最后一天或全年代际结束
+                next_day = init_day + timedelta(days=1)
+                is_month_end = (next_day > init_end) or (next_day.month != current_month)
+
+                if is_month_end and month_count > 0:
+                    pct = (completed_in_year / total_days) * 100
+                    avg_speed = month_elapsed / max(month_count, 1)
+                    rem_days = total_days - completed_in_year
+                    rem_minutes = (rem_days * avg_speed) / 60.0
+                    health_fn = getattr(self.fetcher, "check_link_health", None)
+                    if health_fn:
+                        health = health_fn()
+                        status_text = "正常" if health["healthy"] else "异常"
+                        rtt_str = f"RTT {health['rtt_ms']}ms" if health["rtt_ms"] is not None else "未知"
+                    else:
+                        status_text = "正常"
+                        rtt_str = "未探测"
+
+                    summary_line = (
+                        f"[{init_day.year}-{current_month:02d} 完成] "
+                        f"{month_count:2d} 天 ({pct:5.1f}%) | "
+                        f"平均: {avg_speed:4.1f}s/天 | "
+                        f"链路: {status_text} ({rtt_str}) | "
+                        f"预估剩余: {rem_minutes:4.1f} 分钟"
+                    )
+                    print(summary_line)
+
+                    # 重置月度统计
+                    current_month = next_day.month
+                    month_count = 0
+                    month_elapsed = 0.0
+
                 init_day += timedelta(days=1)
+
+            total_year_elapsed = time.perf_counter() - year_start_time
+            print(
+                f"✅ {station.upper()} {year} 年下载裁剪完成: 共 {completed_in_year} 天, "
+                f"总耗时 {total_year_elapsed/60:.1f} 分钟 (平均 {total_year_elapsed/max(completed_in_year, 1):.2f}s/天)"
+            )
 
     def _default_crop_year(self, year: int) -> None:
         """Persist staged cropped data into the processed tree, verify it

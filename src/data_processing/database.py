@@ -15,7 +15,11 @@ from typing import Any, Dict, List, Optional, Union
 
 import pandas as pd
 
-DEFAULT_DB_PATH = Path("data/db/predictions.db")
+DEFAULT_DB_PATH = (
+    Path("data/wunderground.db")
+    if Path("data/wunderground.db").exists()
+    else Path("data/db/predictions.db")
+)
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS observations (
@@ -153,7 +157,10 @@ class TimeSeriesDatabase:
         query += " ORDER BY date ASC"
 
         with self._get_connection() as conn:
-            return pd.read_sql_query(query, conn, params=params)
+            df = pd.read_sql_query(query, conn, params=params)
+        if "temp_high" in df.columns and "temp_max" not in df.columns:
+            df = df.rename(columns={"temp_high": "temp_max", "temp_low": "temp_min"})
+        return df
 
     def save_predictions(self, df: pd.DataFrame) -> int:
         """Batch upsert model prediction distribution records."""

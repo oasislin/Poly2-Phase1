@@ -15,9 +15,57 @@ Caching / retry belong to T06.
 """
 
 import hashlib
+import logging
 import time
+import urllib.error
+import urllib.request
 from datetime import date, datetime, timedelta
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
+
+def check_data_link_health(
+    target_url: str = "https://noaa-gefs-retrospective.s3.amazonaws.com",
+    timeout: float = 5.0,
+) -> dict:
+    """Probe network connectivity and latency to the GEFS AWS S3 data source.
+
+    Returns a dict with 'healthy' (bool), 'status_code' (int or None),
+    'rtt_ms' (int), and 'message' (str).
+    """
+    t0 = time.perf_counter()
+    try:
+        req = urllib.request.Request(
+            target_url,
+            headers={"User-Agent": "Mozilla/5.0 (Poly-Way2-HealthProbe)"},
+        )
+        with urllib.request.urlopen(req, timeout=timeout) as response:
+            rtt_ms = int((time.perf_counter() - t0) * 1000)
+            code = response.status
+            return {
+                "healthy": True,
+                "status_code": code,
+                "rtt_ms": rtt_ms,
+                "message": f"正常连通 (HTTP {code}, 响应延迟 {rtt_ms}ms, 无封禁迹象)",
+            }
+    except urllib.error.HTTPError as exc:
+        rtt_ms = int((time.perf_counter() - t0) * 1000)
+        # S3 root may return 403 Forbidden or 200, which means S3 is reachable and responding!
+        return {
+            "healthy": True,
+            "status_code": exc.code,
+            "rtt_ms": rtt_ms,
+            "message": f"源站可达 (HTTP {exc.code}, 响应延迟 {rtt_ms}ms)",
+        }
+    except Exception as exc:
+        rtt_ms = int((time.perf_counter() - t0) * 1000)
+        return {
+            "healthy": False,
+            "status_code": None,
+            "rtt_ms": rtt_ms,
+            "message": f"连接异常: {exc}",
+        }
+
 
 import xarray as xr
 
@@ -82,16 +130,27 @@ class GEFSFetcher:
         self._cache = {}
 
     @staticmethod
+    def check_link_health(timeout: float = 5.0) -> dict:
+        """Probe AWS S3 link health."""
+        return check_data_link_health(timeout=timeout)
+
+    @staticmethod
     def _is_retryable(exc) -> bool:
         """True for transient network/IO failures.
 
         Herbie wraps requests/IO errors as RuntimeError (its ``__cause__`` is the
-        original OSError); unwrap those so they retry too. A RuntimeError with a
-        non-OSError cause (or no cause) is a genuine bug and must propagate.
+        original OSError); unwrap those so they retry too. Herbie also raises
+        ValueError when S3 idx index file fetch times out or fails remotely.
         """
-        return isinstance(exc, OSError) or (
-            isinstance(exc, RuntimeError) and isinstance(exc.__cause__, OSError)
-        )
+        if isinstance(exc, OSError):
+            return True
+        if isinstance(exc, RuntimeError) and isinstance(exc.__cause__, OSError):
+            return True
+        if isinstance(exc, ValueError) and any(
+            msg in str(exc) for msg in ("No index file", "Cant open index", "index file was found")
+        ):
+            return True
+        return False
 
     def _execute_with_retry(self, func):
         """Execute func with exponential backoff retry on transient network/IO errors."""
@@ -99,19 +158,30 @@ class GEFSFetcher:
         for attempt in range(self.max_retries):
             try:
                 return func()
-            except (OSError, RuntimeError) as exc:
+            except Exception as exc:
                 if not self._is_retryable(exc):
                     raise
                 last_exc = exc
+                health = self.check_link_health()
+                logger.warning(
+                    f"[RETRY] Attempt {attempt + 1}/{self.max_retries} failed ({exc}). "
+                    f"链路诊断: {health['message']}"
+                )
                 if attempt < self.max_retries - 1:
                     sleep_s = self.backoff_base * (2 ** attempt)
                     time.sleep(sleep_s)
+        health = self.check_link_health()
         raise GEFSDownloadError(
-            f"Operation failed after {self.max_retries} attempts: {last_exc}"
+            f"Operation failed after {self.max_retries} attempts: {last_exc}. "
+            f"链路状态: {health['message']}"
         ) from last_exc
 
     def _download_with_retry(self, h, search=None, expected_md5=None):
         def _attempt():
+            if getattr(h, "idx", None) is None and getattr(h, "grib", None):
+                h.idx = f"{h.grib}.idx"
+                h.IDX_STYLE = "wgrib2"
+                h.idx_source = "aws"
             if "index_as_dataframe" in h.__dict__:
                 del h.__dict__["index_as_dataframe"]
             path = h.download(search=search) if search is not None else h.download()
@@ -141,6 +211,12 @@ class GEFSFetcher:
 
     def _xarray_with_retry(self, h, search=None):
         def _attempt():
+            if getattr(h, "idx", None) is None and getattr(h, "grib", None):
+                h.idx = f"{h.grib}.idx"
+                h.IDX_STYLE = "wgrib2"
+                h.idx_source = "aws"
+            if "index_as_dataframe" in h.__dict__:
+                del h.__dict__["index_as_dataframe"]
             if search is not None:
                 return h.xarray(search=search)
             return h.xarray()
@@ -229,19 +305,23 @@ class GEFSFetcher:
         )
         if cache_key in self._cache:
             return self._cache[cache_key].copy(deep=True)
-        h = Herbie(
-            init_time,
-            model="gefs_reforecast",
-            member=member,
-            fxx=0,
-            variable_level=variable,
-            save_dir=self.cache_dir,
-            verbose=self.verbose,
-        )
         search = self._build_search(variable, forecast_hours)
-        self._download_with_retry(h, search=search, expected_md5=expected_md5)
-        ds = self._xarray_with_retry(h, search=search)
-        ds = self.extract_region(ds, region_bounds["lat"], region_bounds["lon"])
+
+        def _fetch_attempt():
+            h = Herbie(
+                init_time,
+                model="gefs_reforecast",
+                member=member,
+                fxx=0,
+                variable_level=variable,
+                save_dir=self.cache_dir,
+                verbose=self.verbose,
+            )
+            self._download_with_retry(h, search=search, expected_md5=expected_md5)
+            ds = self._xarray_with_retry(h, search=search)
+            return self.extract_region(ds, region_bounds["lat"], region_bounds["lon"])
+
+        ds = self._execute_with_retry(_fetch_attempt)
         self._cache[cache_key] = ds
         return ds.copy(deep=True)
 
