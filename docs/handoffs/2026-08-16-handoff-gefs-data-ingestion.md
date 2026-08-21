@@ -1,6 +1,7 @@
 # Handoff: GEFS 真实数据批量下载与特征库生产运行 (Data Ingestion Run)
 
-**日期**: 2026-08-16  
+**日期**: 2026-08-16 (已对齐 v5.9.2)  
+**规格版本**: v5.9.2  
 **上下文**: Phase 1A（Task 1.1 ~ Task 1.4）已 100% 交付并通过 82 项测试与真实数据契约校验。本任务为独立的**数据实例化与生产运行任务**，为 Phase 1B 模型训练准备全量 20 年（2000-2019）的真实特征库（Parquet）与训练对齐数据。
 
 ---
@@ -84,6 +85,7 @@ python scripts/download_gefs_batch.py --start-year 2000 --end-year 2018 --auto-c
 2. **网格规格**：真实分辨率为 **0.25°**（上海 25-35°N, 115-125°E，丹佛 35-45°N, -110--100°E，均为 41×41 格点）。
 3. **特征列规范**：严格为 4 项集合统计量 `{ensemble_mean, ensemble_variance, member_max, member_min}`，严禁引入分位数（p10/p90）或人工时间特征。
 4. **运行环境**：macOS 本机运行 Python 或 pytest 时需保证使用对应虚拟环境或指定 `BypassSandbox: true`。
+5. **GRIB 变量合并容差约束**：NOAA 历史重预报不同批次间 `tmax_2m` 与 `tmin_2m` 的 `valid_time` 属性字段存在微小差异，`xr.merge` 与 `xr.concat` 必须显式声明 `compat='override'` 与 `coords='minimal'`，避免严格比对误判阻断。
 
 ---
 

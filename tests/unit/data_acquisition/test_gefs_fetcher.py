@@ -747,3 +747,45 @@ def test_network_reforecast_single_message(tmp_path):
     assert ds.sizes["time"] >= 1
     assert ds.latitude.min() >= 25
     assert ds.longitude.max() <= 125
+
+
+class TestMergeTolerance:
+    """Contract test for ADR-0005 / v5.9.2: xarray merge with valid_time attribute conflicts."""
+
+    def test_merge_with_conflicting_valid_time_attrs_overrides_safely(self):
+        import numpy as np
+        import pandas as pd
+        import xarray as xr
+
+        times = pd.date_range("2018-12-31", periods=1)
+        valid_times = pd.date_range("2019-01-01", periods=1)
+
+        # ds1: tmax with tmax GRIB attributes on valid_time
+        ds1 = xr.Dataset(
+            data_vars={"tmax": (("time", "latitude", "longitude"), np.array([[[280.0]]]))},
+            coords={
+                "time": times,
+                "valid_time": ("time", valid_times, {"GRIB_stepType": "max", "var": "tmax"}),
+                "latitude": [30.0],
+                "longitude": [120.0],
+            },
+        )
+
+        # ds2: tmin with conflicting tmin GRIB attributes on valid_time
+        ds2 = xr.Dataset(
+            data_vars={"tmin": (("time", "latitude", "longitude"), np.array([[[270.0]]]))},
+            coords={
+                "time": times,
+                "valid_time": ("time", valid_times, {"GRIB_stepType": "min", "var": "tmin"}),
+                "latitude": [30.0],
+                "longitude": [120.0],
+            },
+        )
+
+        # Standard xr.merge with compat='override' merges without error
+        merged = xr.merge([ds1, ds2], compat="override", combine_attrs="override")
+        assert "tmax" in merged.data_vars
+        assert "tmin" in merged.data_vars
+        assert merged["tmax"].values[0, 0, 0] == 280.0
+        assert merged["tmin"].values[0, 0, 0] == 270.0
+

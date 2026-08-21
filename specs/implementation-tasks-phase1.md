@@ -148,135 +148,87 @@
 
 ## Phase 1C: Prediction System (Weeks 5-6)
 
+> **对齐 v5.9.2 执行规格与 Spec #25（2026-08-20）**：Phase 1C 细化拆解为 6 张垂直切片 Tickets（#26 ~ #31），覆盖静态基础预测、实时动态截断、物理变温率硬约束、Polymarket 规则离散化转换与端到端预测流水线。
+
 ### Task 3.1: Static Prediction
 **Priority**: High
 **Estimate**: 3 days
 **Dependencies**: Task 2.2, 1.2
+**Spec**: #25
 
-**Description**: Implement base prediction from GEFS features（v5.9 口径：高斯 + 插值）
-- [ ] Create `static_predictor.py` loading appropriate seasonal model
-- [ ] Generate Gaussian parameters (μ, σ)（无 skewness）
-- [ ] **参数插值**：缺失时效节点在相邻真实节点间线性内插 (a,b,c,d)
-- [ ] **短时效收缩**：最低温 <24h 借用 24h 参数，σ_final = σ_24h × √(L/24)
-- [ ] Add confidence intervals and prediction intervals
-- [ ] Implement batch prediction for multiple stations/dates
-
-**Acceptance Criteria**:
-- Correct model selected by station, season, temp type, and lead time（命中真实节点用真实模型，否则插值）
-- 插值输出 = 端点参数线性组合
-- 短时效收缩公式正确（√(L/24)）
-- Predictions generated within time budget
-- Batch prediction efficient
+- [x] **#26 (Ticket 3.1-01)**: `StaticPredictor` 静态基础预测器与模型路由 (封装 `ModelRegistry` 与 `LeadTimeInterpolator`, 输出基准高斯分布参数 $(\mu, \sigma)$ 与 `GaussianEMOS`, 支持置信区间与 DataFrame 批量预测)
 
 ### Task 3.2: Dynamic Correction
 **Priority**: High
 **Estimate**: 3 days
 **Dependencies**: Task 3.1
+**Spec**: #25
 
-**Description**: Implement conditional probability truncation
-- [ ] Create `dynamic_corrector.py` with hourly updates
-- [ ] Implement P(X ≥ L | X > T_now) for max temps
-- [ ] Implement P(X ≤ L | X < T_now) for min temps
-- [ ] Add real-time temperature integration
-- [ ] Handle missing current temperature gracefully
-
-**Acceptance Criteria**:
-- Posterior probability ≠ prior when current temp known
-- Mathematical formulas implemented correctly
-- Handles edge cases (current temp at boundaries)
-- Efficient computation for hourly updates
+- [x] **#27 (Ticket 3.2-01)**: `DynamicCorrector` 实时实况条件概率截断修正器 ($P(X \ge L \mid X \ge T_{now})$ 与 $P(X \le L \mid X \le T_{now})$ 数学截断, 后验 CDF 单调性保证, 边界除零 $\epsilon=10^{-7}$ 保护与缺测无缝回退)
 
 ### Task 3.3: Physical Constraints
 **Priority**: Medium
 **Estimate**: 2 days
 **Dependencies**: Task 1.2, 3.1
+**Spec**: #25
 
-**Description**: Apply physical constraints based on historical rates
-- [ ] Create `constraint_enforcer.py` with station-specific limits
-- [ ] Calculate max warming/cooling rates from Wunderground data
-- [ ] Implement constraint override logic
-- [ ] Add seasonal variation in constraints
-
-**Acceptance Criteria**:
-- Constraints respect historical limits
-- Override logic correct (0 or 1 probabilities)
-- Seasonal constraints applied appropriately
-- Constraints documented with source data
+- [x] **#28 (Ticket 3.3-01)**: `ConstraintEnforcer` 历史变温率物理极限硬约束执行器 (基于各站点历史最大升/降温速率 $\times$ 极值窗口剩余时间 $\Delta t$ 计算机理不可达边界, 硬截断超限概率为 0.0/1.0, 物理硬约束覆盖优先级)
 
 ### Task 3.4: Bin Probability Conversion
 **Priority**: Medium
 **Estimate**: 2 days
 **Dependencies**: Task 3.1, 3.2, 3.3
+**Spec**: #25
 
-**Description**: Convert continuous distributions to Polymarket bins
-- [ ] Create `bin_converter.py` for probability calculation
-- [ ] Implement bin types: "=T", "T1-T2", "≤T", "≥T"
-- [ ] Add probability mass calculation for each bin
-- [ ] Ensure probabilities sum to 1 across bins
+- [x] **#29 (Ticket 3.4-01)**: `BinConverter` Polymarket 盘口规则转换器与单位映射 (依据 Polymarket 规则模板与自适应区间生成互斥 Bins, $\pm 0.5^\circ$ 连续性修正, 丹佛华氏度/上海摄氏度转换, 概率和归一化, Wunderground 实测结算判定)
 
-**Acceptance Criteria**:
-- Bin probabilities mathematically correct
-- Probabilities sum to 1 within tolerance
-- All bin types supported
-- Efficient calculation for multiple thresholds
+### Task 3.5: Prediction Pipeline & Orchestration
+**Priority**: High
+**Estimate**: 3 days
+**Dependencies**: Task 3.1, 3.2, 3.3, 3.4
+**Spec**: #25
+
+- [x] **#30 (Ticket 3.5-01)**: `PredictionPipeline` 端到端三层预测编排与 SQLite 持久化 (串联四层预测组件, 结果持久化写入 `predictions.db`, 降级状态与元数据记录)
+- [x] **#31 (Ticket 3.5-02)**: `run_predictions.py` CLI 预测工具与全流程集成验证 (命令行交互参数, 预测看板生成, `tests/integration/test_prediction_integration.py` 两站端到端集成测试)
 
 ## Phase 1D: Validation System (Weeks 7-8)
 
-### Task 4.1: Validation Metrics
+> **对齐 v5.9.2 执行规格与 Spec #32（2026-08-20）**：Phase 1D 细化拆解为 7 张垂直切片 Tickets（#33 ~ #39），覆盖统计指标与显著性检验、v5.9.2 三重验收门禁、历史回测引擎与多基线比对、回测看板生成器、监控告警系统与 CLI 端到端集成。
+
+### Task 4.1: Validation Metrics & Triple Acceptance System
 **Priority**: High
 **Estimate**: 3 days
-**Dependencies**: Task 2.2, 3.1
+**Dependencies**: Task 2.2, 3.1, 3.4
+**Spec**: #32
 
-**Description**: Implement comprehensive validation metrics（v5.9 三重验收）
-- [ ] Create `metrics_calculator.py` with CRPS, PIT, Talagrand
-- [ ] **标准节点验收**：PIT K-S（p>0.05）+ CRPS 衰减配对检验
-- [ ] **插值节点验收**：留出最高温 30h，用 {6h,54h} 插值重建；双断言 CRPS_virtual ≤ 1.05×CRPS_real 且 PIT p>0.05
-- [ ] **极端事件 OOS 压力测试**：2019 池（阈值 2000-2018 分位数），Warm/Cold Tail 对称；双断言 CRPS_model < CRPS_clim 且 90% CI 覆盖率 ≥ 80%
-- [ ] Add Talagrand diagram generation
-- [ ] Implement statistical significance testing
-
-**Acceptance Criteria**:
-- CRPS calculation matches reference
-- PIT histogram correctly computed
-- 三重验收全部通过（标准/插值/极端）
-- Talagrand diagram shows spread reliability
-- Statistical tests correctly implemented
+- [x] **#33 (Ticket 4.1-01)**: `MetricsCalculator` 高级概率与离散盘口验证指标库 (CRPS, CRPSS, Brier Score, BSS, Log Loss, PIT Histogram, Talagrand Rank Diagram, ECE 与 Reliability Curve)
+- [x] **#34 (Ticket 4.1-02)**: `StatisticalSignificance` 预测技巧统计显著性检验器 (Diebold-Mariano Test, Wilcoxon Signed-Rank Test, Paired t-test, PIT KS 检验)
+- [x] **#35 (Ticket 4.1-03)**: `TripleGateEvaluator` v5.9.2 三重验收门禁独立评估器 (标准节点 PIT+CRPS 检验、30h 留出插值 $\text{CRPS}_{virt} \le 1.05\text{CRPS}_{real}$ 双断言、2019 严格 OOS 极端事件 90% CI $\ge 80\%$ 覆盖率与气候学战胜双断言)
 
 ### Task 4.2: Historical Backtesting
 **Priority**: High
 **Estimate**: 4 days
-**Dependencies**: Task 4.1, 3.4
+**Dependencies**: Task 4.1, 3.4, 3.5
+**Spec**: #32
 
-**Description**: Backtest system on historical data
-- [ ] Create `backtester.py` for historical validation
-- [ ] Implement time-series cross-validation respecting temporal order
-- [ ] Generate validation reports with all metrics
-- [ ] Compare against naive benchmarks
-- [ ] Create visualizations of performance over time
-
-**Acceptance Criteria**:
-- Proper time-series splitting (no data leakage)
-- Comprehensive performance reports
-- Statistical superiority over benchmarks
-- Clear visualizations of results
+- [x] **#36 (Ticket 4.2-01)**: `Backtester` 历史回测引擎与多基准 Baseline 对比 (Rolling-Origin 滚动时序回测、支持静态/动态/物理约束/离散化 Bins 端到端预测链路、Climatology / Raw GEFS / Persistence 基准对比)
+- [x] **#37 (Ticket 4.2-02)**: `BacktestReporter` 回测综合评估看板与时序诊断生成器 (Lead Time 衰减分析、季节/站点分层矩阵、Polymarket 盘口校准可靠性评估、Markdown/JSON/CSV 报告导出)
 
 ### Task 4.3: Alerting System
 **Priority**: Medium
 **Estimate**: 2 days
-**Dependencies**: Task 4.1
+**Dependencies**: Task 4.1, 4.2
+**Spec**: #32
 
-**Description**: Implement monitoring and alerting
-- [ ] Create `alert_manager.py` with configurable thresholds
-- [ ] Add CRPS degradation detection (>20% vs benchmark)
-- [ ] Implement PIT non-uniformity detection
-- [ ] Add data freshness monitoring
-- [ ] Create alert channels (log, email, Slack)
+- [x] **#38 (Ticket 4.3-01)**: `AlertManager` & `AlertDispatcher` 性能劣化与数据异常监控告警系统 (CRPS 劣化 >20% 监控、PIT 偏离告警、数据时效 Freshness 检查、防抖节流 Throttling、多通道分发)
 
-**Acceptance Criteria**:
-- Alerts trigger on performance degradation
-- Configurable thresholds and channels
-- Alert throttling to prevent spam
-- Clear alert messages with context
+### Task 4.4: Validation CLI & System Integration
+**Priority**: High
+**Estimate**: 2 days
+**Dependencies**: Task 4.1, 4.2, 4.3
+**Spec**: #32
+
+- [x] **#39 (Ticket 4.4-01)**: `run_backtest.py` CLI 命令行工具与 Phase 1D 全流程集成验证 (两站历史全流程回测验证、三重门禁自动化裁决、监控告警全链路集成测试)
 
 ## Phase 1E: System Integration (Week 9)
 

@@ -271,10 +271,21 @@ class GEFSFetcher:
                         )
                         for variable in REFORECAST_VARIABLES
                     ]
-                    member_ds = xr.merge(var_dss).expand_dims(member=[member])
+                    member_ds = xr.merge(
+                        var_dss, compat="override", combine_attrs="override"
+                    ).expand_dims(member=[member])
                     member_dss.append(member_ds)
-                blocks.append(xr.concat(member_dss, dim="member"))
-        return xr.concat(blocks, dim="time")
+                blocks.append(
+                    xr.concat(
+                        member_dss,
+                        dim="member",
+                        coords="minimal",
+                        compat="override",
+                    )
+                )
+        return xr.concat(
+            blocks, dim="time", coords="minimal", compat="override"
+        )
 
     def _fetch_variable(
         self,
@@ -389,14 +400,18 @@ class GEFSFetcher:
                         self._cache[cache_key] = vds
                         vds = vds.copy(deep=True)
                     var_dss.append(vds)
-                fxx_dss.append(xr.merge(var_dss))
-            member_ds = xr.concat(fxx_dss, dim="step").expand_dims(
-                member=[member]
-            )
+                fxx_dss.append(
+                    xr.merge(var_dss, compat="override", combine_attrs="override")
+                )
+            member_ds = xr.concat(
+                fxx_dss, dim="step", coords="minimal", compat="override"
+            ).expand_dims(member=[member])
             member_dss.append(member_ds)
         if len(member_dss) == 1:
             return member_dss[0]
-        return xr.concat(member_dss, dim="member")
+        return xr.concat(
+            member_dss, dim="member", coords="minimal", compat="override"
+        )
 
     @staticmethod
     def calculate_md5(data_or_path) -> str:
