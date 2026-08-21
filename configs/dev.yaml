@@ -1,0 +1,9 @@
+# Dev environment overlay
+env: dev
+
+model:
+  l2_reg: 0.001
+
+alert:
+  enabled_channels:
+    - console

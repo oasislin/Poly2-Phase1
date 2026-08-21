@@ -232,59 +232,44 @@
 
 ## Phase 1E: System Integration (Week 9)
 
-### Task 5.1: Main Pipeline Integration
+> **对齐 v5.9.2 执行规格与 Phase 1 验收标准（2026-08-21）**：Phase 1E 细化拆解为 7 张垂直切片 Tickets（#40 ~ #46），全量覆盖强类型配置系统、结构化日志与运行 Profiler、MainPipeline 状态机编排器、全局异常隔离与健康诊断、统一 CLI 交互中枢、E2E 系统级集成测试与运维排障手册。
+
+### Task 5.1: Configuration & Logging Infrastructure
+**Priority**: High
+**Estimate**: 2 days
+**Dependencies**: Phase 1A-1D
+
+- [x] **#40 (Ticket 5.1-01)**: `ConfigManager` 强类型配置管理系统与多环境架构 (`src/pipeline/config.py`, `configs/default.yaml`, `configs/dev.yaml`, `configs/test.yaml`, Pydantic Schema 强校验, 环境变量 `POLY_*` 注入与敏感信息脱敏)
+- [x] **#41 (Ticket 5.1-02)**: `StructuredLogger` 结构化日志与运行度量 (`src/utils/logger.py`, `src/utils/profiler.py`, 上下文绑定 `contextualize(station, stage, lead_time)`, `@profile_stage` 耗时统计与 Markdown 报告)
+
+### Task 5.2: Pipeline Orchestration & Resilience
 **Priority**: High
 **Estimate**: 3 days
-**Dependencies**: All previous tasks
+**Dependencies**: Task 5.1, All previous phases
 
-**Description**: Integrate all components into unified pipeline
-- [ ] Create `main_pipeline.py` orchestrating data→features→prediction→validation
-- [ ] Implement configuration system (YAML)
-- [ ] Add logging and monitoring throughout
-- [ ] Create command-line interface
-- [ ] Add comprehensive error handling
+- [x] **#42 (Ticket 5.2-01)**: `MainPipeline` 端到端全流程状态机编排器 (`src/pipeline/main_pipeline.py`, Ingest $\to$ Feature $\to$ Train $\to$ Predict $\to$ Validate 五阶段调度, 支持 `--resume-from` 断点恢复)
+- [x] **#43 (Ticket 5.2-02)**: `PipelineResilience` & `HealthChecker` 全局异常隔离与健康自检 (`src/pipeline/resilience.py`, `src/pipeline/health.py`, 指数退避重试, 单点故障隔离, 存储/数据库/40模型就绪诊断)
 
-**Acceptance Criteria**:
-- Pipeline runs end-to-end from config
-- All components integrated correctly
-- Comprehensive logging at all stages
-- Graceful error handling and recovery
+### Task 5.3: Unified CLI Interface
+**Priority**: High
+**Estimate**: 1 day
+**Dependencies**: Task 5.1, 5.2
 
-### Task 5.2: Configuration System
-**Priority**: Medium
+- [x] **#44 (Ticket 5.3-01)**: `scripts/run_poly_pipeline.py` 统一 CLI 交互中枢 (支持 `all`, `health`, `ingest`, `feature`, `train`, `predict`, `backtest` 子命令与配置动态注入)
+
+### Task 5.4: End-to-End System Testing
+**Priority**: High
 **Estimate**: 2 days
-**Dependencies**: Task 5.1
+**Dependencies**: Task 5.1, 5.2, 5.3
 
-**Description**: Create flexible configuration system
-- [ ] Design YAML configuration schema
-- [ ] Implement configuration validation
-- [ ] Add environment-specific configs (dev, test, prod)
-- [ ] Create configuration documentation
-- [ ] Add secret management for API keys
+- [x] **#45 (Ticket 5.4-01)**: `tests/e2e/test_e2e_pipeline.py` E2E 系统级全链路集成测试套件 (两站从输入到 40 模型推理与 Triple Gate 评测闭环验证)
 
-**Acceptance Criteria**:
-- All parameters configurable
-- Configuration validation with clear errors
-- Environment separation works correctly
-- Secrets not exposed in logs
-
-### Task 5.3: Documentation and Examples
+### Task 5.5: Production Documentation & Assets
 **Priority**: Medium
-**Estimate**: 2 days
-**Dependencies**: Task 5.1
+**Estimate**: 1 day
+**Dependencies**: Task 5.1~5.4
 
-**Description**: Create user documentation and examples
-- [ ] Write comprehensive README
-- [ ] Create example configuration files
-- [ ] Add usage examples for common scenarios
-- [ ] Document API/interfaces for each module
-- [ ] Create troubleshooting guide
-
-**Acceptance Criteria**:
-- New user can run pipeline from documentation
-- All configuration options documented
-- Common issues and solutions documented
-- API documentation complete
+- [x] **#46 (Ticket 5.5-01)**: 生产配置手册与实战排障运维指南 (`README.md`, `docs/configuration-guide.md`, `docs/troubleshooting.md`, 提炼自 ADRs 0001~0005 与真实踩坑实证)
 
 ## Testing Tasks (Parallel)
 

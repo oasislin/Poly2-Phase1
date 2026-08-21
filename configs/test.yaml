@@ -1,0 +1,12 @@
+# Test environment overlay
+env: test
+
+data:
+  raw_dir: data/test_raw
+  processed_dir: data/test_processed
+  models_dir: data/test_models
+  db_dir: data/test_db
+  predictions_db_path: data/test_db/test_predictions.db
+
+validation:
+  triple_gate_enabled: true

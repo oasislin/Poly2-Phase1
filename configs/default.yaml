@@ -1,0 +1,57 @@
+# Default configuration aligned with v5.9.2 execution specification
+
+env: default
+
+data:
+  stations:
+    - ZSPD
+    - KDEN
+  members:
+    - 0
+    - 1
+    - 2
+    - 3
+    - 4
+  raw_dir: data/raw
+  processed_dir: data/processed
+  models_dir: data/models
+  db_dir: data/db
+  predictions_db_path: data/db/predictions.db
+  train_years:
+    - 2000
+    - 2018
+  val_years:
+    - 2019
+    - 2019
+
+model:
+  max_lead_times:
+    - 6
+    - 30
+    - 54
+  min_lead_times:
+    - 24
+    - 48
+  l2_reg: 0.001
+  climatology_window_days: 31
+  optimizer: L-BFGS-B
+  variance_floor_type: climatology
+
+prediction:
+  dynamic_correction_enabled: true
+  physical_constraints_enabled: true
+  bin_width: 1.0
+  tolerance_epsilon: 1.0e-7
+
+validation:
+  triple_gate_enabled: true
+  alpha_significance: 0.05
+  virtual_crps_loss_threshold: 1.05
+  extreme_ci_target: 0.90
+  extreme_ci_coverage_min: 0.80
+
+alert:
+  crps_degradation_threshold: 0.20
+  enabled_channels:
+    - console
+  webhook_url: null
