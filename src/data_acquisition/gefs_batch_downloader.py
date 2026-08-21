@@ -230,7 +230,7 @@ class GEFSBatchDownloader:
           re-downloaded); otherwise GEFSFetcher memoizes per-(init, member,
           variable) and Herbie's own `save_dir` cache skips files it already has.
         """
-        init_start = date(year - 1, 12, 31)
+        init_start = max(date(year - 1, 12, 31), date(2000, 1, 1))
         init_end = date(year, 12, 30)
         staging_dir = self.raw_cache_dir / "cropped" / str(year)
         total_days = (init_end - init_start).days + 1
